@@ -1,0 +1,401 @@
+// Prisma Schema for NestMates
+// Enterprise-grade database schema with lifecycle management
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id            String    @id @default(cuid())
+  uniqueUserId  String    @unique @default(cuid()) // Public identifier
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  displayName   String?   // Optional public display name
+  image         String?
+  phone         String?
+  phoneVerified Boolean   @default(false)
+  
+  // Privacy settings
+  showRealName  Boolean   @default(false)
+  
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastActiveAt  DateTime  @default(now())
+  
+  // Relations
+  accounts      Account[]
+  sessions      Session[]
+  otpCodes      OtpCode[]
+  
+  // Posts
+  accommodationPosts  AccommodationPost[]
+  logisticsPosts      LogisticsPost[]
+  eventPosts          EventPost[]
+  
+  // Chat relations
+  chatsAsOwner        Chat[]         @relation("ChatOwner")
+  chatsAsResponder    Chat[]         @relation("ChatResponder")
+  messages            Message[]
+  
+  // Notifications
+  notifications       Notification[]
+  
+  @@index([email])
+  @@index([uniqueUserId])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model OtpCode {
+  id        String   @id @default(cuid())
+  userId    String
+  code      String
+  type      String   // EMAIL_VERIFICATION, PHONE_VERIFICATION, LOGIN
+  expiresAt DateTime
+  verified  Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+  @@index([code, type])
+}
+
+// ============================================
+// LOCATION & GEOGRAPHY
+// ============================================
+
+model Country {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  code      String   @unique // ISO 3166-1 alpha-2
+  flag      String   // Emoji flag
+  isActive  Boolean  @default(true)
+  sortOrder Int      @default(0)
+  
+  states    State[]
+  
+  @@index([code])
+}
+
+model State {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   // State/Province code
+  countryId String
+  isActive  Boolean  @default(true)
+  
+  country   Country  @relation(fields: [countryId], references: [id])
+  
+  accommodationPosts AccommodationPost[]
+  logisticsPosts     LogisticsPost[]
+  eventPosts         EventPost[]
+  
+  @@unique([countryId, code])
+  @@index([countryId])
+}
+
+// ============================================
+// ACCOMMODATION MODULE
+// ============================================
+
+model AccommodationPost {
+  id            String   @id @default(cuid())
+  
+  // Title
+  title         String?
+  
+  // Location
+  stateId       String
+  city          String
+  zipCode       String?
+  
+  // Address (from Google Maps)
+  formattedAddress String
+  latitude      Float
+  longitude     Float
+  placeId       String?  // Google Place ID
+  
+  // Property details
+  propertyType  String   // APARTMENT, SINGLE_HOME, SHARED_HOME, TOWNHOME, CONDO
+  rent          Float?   // Monthly rent amount
+  description   String
+  
+  // Owner
+  userId        String
+  
+  // Lifecycle
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  expiresAt     DateTime // Auto-calculated: createdAt + 3 months
+  isActive      Boolean  @default(true)
+  deletedAt     DateTime?
+  
+  // Relations
+  state         State    @relation(fields: [stateId], references: [id])
+  user          User     @relation(fields: [userId], references: [id])
+  chats         Chat[]
+  
+  @@index([stateId, isActive])
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([city])
+  @@index([zipCode])
+}
+
+// ============================================
+// LOGISTICS / RIDE SHARE MODULE
+// ============================================
+
+model LogisticsPost {
+  id            String    @id @default(cuid())
+  
+  // Title
+  title         String?
+  
+  // Location
+  stateId       String
+  
+  // From location
+  fromCity      String
+  fromAddress   String
+  fromLatitude  Float
+  fromLongitude Float
+  fromPlaceId   String?
+  
+  // To location
+  toCity        String
+  toAddress     String
+  toLatitude    Float
+  toLongitude   Float
+  toPlaceId     String?
+  
+  // Trip details
+  travelDate    DateTime
+  description   String
+  seatsAvailable Int?
+  
+  // Owner
+  userId        String
+  
+  // Lifecycle
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  expiresAt     DateTime  // Auto-calculated: createdAt + 1 month
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  
+  // Relations
+  state         State     @relation(fields: [stateId], references: [id])
+  user          User      @relation(fields: [userId], references: [id])
+  chats         Chat[]
+  
+  @@index([stateId, isActive])
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([travelDate])
+  @@index([fromCity])
+  @@index([toCity])
+}
+
+// ============================================
+// EVENTS / PERSONAL ADS MODULE
+// ============================================
+
+model EventPost {
+  id            String    @id @default(cuid())
+  
+  // Location
+  stateId       String
+  city          String?
+  venue         String?
+  
+  // Event details
+  title         String
+  description   String
+  eventDate     DateTime?
+  eventType     String    // COMMUNITY_EVENT, CULTURAL_FESTIVAL, MEETUP, WORKSHOP, PERSONAL_AD, SERVICE, OTHER
+  
+  // Contact (optional public)
+  contactInfo   String?
+  
+  // Owner
+  userId        String
+  
+  // Lifecycle
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  expiresAt     DateTime? // Optional expiry
+  isActive      Boolean   @default(true)
+  deletedAt     DateTime?
+  
+  // Relations
+  state         State     @relation(fields: [stateId], references: [id])
+  user          User      @relation(fields: [userId], references: [id])
+  
+  @@index([stateId, isActive])
+  @@index([userId])
+  @@index([eventType])
+  @@index([eventDate])
+}
+
+// ============================================
+// CHAT SYSTEM
+// ============================================
+
+model Chat {
+  id                  String     @id @default(cuid())
+  
+  // Chat type determines which post it belongs to
+  chatType            String     // ACCOMMODATION, LOGISTICS
+  
+  // Post references (one will be set based on chatType)
+  accommodationPostId String?
+  logisticsPostId     String?
+  
+  // Participants
+  ownerId             String     // Post owner
+  responderId         String     // Person who responded
+  
+  // Lifecycle
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  expiresAt           DateTime   // Post expiry + 1 month
+  scheduledDeletionAt DateTime?  // 1 week after post deletion/expiration
+  
+  // Notification tracking
+  ownerNotified1Month    Boolean @default(false)
+  ownerNotified1Week     Boolean @default(false)
+  ownerNotified1Day      Boolean @default(false)
+  responderNotified1Month Boolean @default(false)
+  responderNotified1Week  Boolean @default(false)
+  responderNotified1Day   Boolean @default(false)
+  
+  // Status
+  isActive            Boolean    @default(true)
+  deletedAt           DateTime?
+  
+  // Relations
+  accommodationPost   AccommodationPost? @relation(fields: [accommodationPostId], references: [id], onDelete: Cascade)
+  logisticsPost       LogisticsPost?     @relation(fields: [logisticsPostId], references: [id], onDelete: Cascade)
+  owner               User               @relation("ChatOwner", fields: [ownerId], references: [id])
+  responder           User               @relation("ChatResponder", fields: [responderId], references: [id])
+  messages            Message[]
+  
+  @@unique([accommodationPostId, responderId])
+  @@unique([logisticsPostId, responderId])
+  @@index([ownerId])
+  @@index([responderId])
+  @@index([expiresAt])
+  @@index([isActive])
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  chatId    String
+  senderId  String
+  content   String
+  
+  // Delivery status
+  sentAt    DateTime @default(now())
+  deliveredAt DateTime?
+  readAt    DateTime?
+  
+  // Relations
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender    User     @relation(fields: [senderId], references: [id])
+  
+  @@index([chatId, sentAt])
+  @@index([senderId])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // NEW_CHAT_RESPONSE, NEW_MESSAGE, POST_EXPIRING, etc.
+  title     String
+  message   String
+  data      String?  // JSON string for additional data (postId, chatId, etc.)
+  
+  // Status
+  read      Boolean  @default(false)
+  readAt    DateTime?
+  
+  // Delivery
+  emailSent Boolean  @default(false)
+  emailSentAt DateTime?
+  
+  createdAt DateTime @default(now())
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, read])
+  @@index([createdAt])
+}
+
+// ============================================
+// CLEANUP LOGS (for auditing)
+// ============================================
+
+model CleanupLog {
+  id          String   @id @default(cuid())
+  type        String   // 'accommodation_post', 'logistics_post', 'chat', etc.
+  recordId    String
+  action      String   // 'deleted', 'notification_sent'
+  details     String?
+  executedAt  DateTime @default(now())
+  
+  @@index([type, executedAt])
+}
