@@ -1,5 +1,5 @@
-import type { Metadata } from 'next';
-import { Outfit, Sora, JetBrains_Mono } from 'next/font/google';
+import type { Metadata, Viewport } from 'next';
+import { Outfit, Sora } from 'next/font/google';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import { Toaster } from '@/components/ui/toaster';
@@ -16,32 +16,27 @@ const sora = Sora({
   display: 'swap',
 });
 
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-jetbrains',
-  display: 'swap',
-});
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 1,
+};
 
 export const metadata: Metadata = {
-  title: 'NestMates - Find Housing, Rides & Events in Your Community',
-  description: 'The trusted platform for immigrants and students to find housing, ride shares, and local community events worldwide.',
-  keywords: ['community', 'housing', 'accommodation', 'ride share', 'events', 'international students', 'immigrants', 'expats'],
+  title: 'NestMates - Find Housing in Your Community',
+  description: 'The trusted housing platform for immigrants and international students. Find apartments, shared homes, and roommates worldwide.',
+  keywords: ['housing', 'accommodation', 'roommates', 'international students', 'immigrants', 'expats', 'apartments'],
   authors: [{ name: 'NestMates Team' }],
-  viewport: {
-    width: 'device-width',
-    initialScale: 1,
-    maximumScale: 1,
-  },
   openGraph: {
-    title: 'NestMates - Your Community, Connected',
-    description: 'Find housing, rides, and events in your community worldwide.',
+    title: 'NestMates - Your Community, Your Home',
+    description: 'Find trusted housing wherever life takes you.',
     type: 'website',
     locale: 'en_US',
   },
   twitter: {
     card: 'summary_large_image',
     title: 'NestMates',
-    description: 'Find housing, rides, and events in your community worldwide.',
+    description: 'Find trusted housing wherever life takes you.',
   },
   robots: {
     index: true,
@@ -56,7 +51,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${outfit.variable} ${sora.variable} ${jetbrainsMono.variable} font-sans antialiased`}>
+      <body className={`${outfit.variable} ${sora.variable} font-sans antialiased`}>
         <Providers>
           {children}
           <Toaster />
@@ -65,4 +60,3 @@ export default function RootLayout({
     </html>
   );
 }
-
