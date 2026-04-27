@@ -19,7 +19,7 @@ const publicApiRoutes = [
   '/api/auth/signout',
 ];
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow all static files
