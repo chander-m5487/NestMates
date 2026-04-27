@@ -1,15 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
-// Public routes that don't require authentication
-const publicRoutes = [
-  '/',
-  '/auth/signin',
-  '/auth/error',
-  '/auth/verify',
-];
+const publicRoutes = ['/', '/auth/signin', '/auth/error', '/auth/verify'];
 
-// API routes that are public
 const publicApiRoutes = [
   '/api/auth/signin',
   '/api/auth/signup',
@@ -19,10 +12,9 @@ const publicApiRoutes = [
   '/api/auth/signout',
 ];
 
-export function proxy(request: NextRequest) {
+export default function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow all static files
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
@@ -31,25 +23,20 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Allow public routes
   if (publicRoutes.includes(pathname)) {
     return NextResponse.next();
   }
 
-  // Allow public API routes
   if (publicApiRoutes.some(route => pathname.startsWith(route))) {
     return NextResponse.next();
   }
 
-  // Allow all API routes for now (they handle their own auth)
   if (pathname.startsWith('/api/')) {
     return NextResponse.next();
   }
 
-  // Check for auth token
   const token = request.cookies.get('auth-token')?.value;
 
-  // If no token and trying to access protected route, redirect to home
   if (!token) {
     return NextResponse.redirect(new URL('/', request.url));
   }
@@ -58,7 +45,5 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico).*)',
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };
