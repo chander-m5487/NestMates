@@ -85,7 +85,7 @@ export default function SelectLocationPage() {
         stateId: selectedState,
         stateName: state?.name || '',
       }));
-      router.push('/select-service');
+      router.push('/accommodation');
     }
   };
 
@@ -114,7 +114,7 @@ export default function SelectLocationPage() {
       <header className="border-b border-gray-200 bg-white/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
               <Globe className="w-6 h-6 text-white" />
             </div>
             <span className="text-xl font-display font-bold text-gray-900">NestMates</span>
@@ -183,11 +183,11 @@ export default function SelectLocationPage() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.1 }}
                     onClick={() => handleCountrySelect(country)}
-                    className="group relative p-6 bg-white rounded-2xl border-2 border-transparent hover:border-primary-500 shadow-sm hover:shadow-lg transition-all duration-300"
+                    className="group relative p-6 bg-white rounded-2xl border-2 border-transparent hover:border-blue-500 shadow-sm hover:shadow-lg transition-all duration-300"
                   >
                     <div className="text-5xl mb-3">{country.flag}</div>
                     <h3 className="font-semibold text-gray-900">{country.name}</h3>
-                    <div className="absolute inset-0 rounded-2xl bg-primary-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="absolute inset-0 rounded-2xl bg-blue-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
                   </motion.button>
                 ))}
               </motion.div>

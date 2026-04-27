@@ -8,12 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/hooks/use-auth';
 import {
-  Globe,
   Home,
-  Car,
-  Calendar,
   MessageSquare,
-  Settings,
   LogOut,
   Menu,
   X,
@@ -21,7 +17,6 @@ import {
   ChevronDown,
   Loader2,
   FileText,
-  User,
 } from 'lucide-react';
 import { MessageIndicator } from '@/components/messages/message-indicator';
 
@@ -31,9 +26,7 @@ interface DashboardLayoutProps {
 }
 
 const navigation = [
-  { id: 'accommodation', label: 'Accommodation', icon: Home, href: '/accommodation' },
-  { id: 'rides', label: 'Ride Share', icon: Car, href: '/rides' },
-  { id: 'events', label: 'Events', icon: Calendar, href: '/events' },
+  { id: 'accommodation', label: 'Housing', icon: Home, href: '/accommodation' },
   { id: 'my-posts', label: 'My Posts', icon: FileText, href: '/my-posts' },
 ];
 
@@ -101,8 +94,8 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
               {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
             <Link href="/select-location" className="flex items-center gap-2">
-              <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-lg bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
-                <Globe className="w-4 h-4 lg:w-5 lg:h-5 text-white" />
+              <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
+                <Home className="w-4 h-4 lg:w-5 lg:h-5 text-white" />
               </div>
               <span className="text-lg lg:text-xl font-display font-bold text-gray-900 hidden sm:block">NestMates</span>
             </Link>
@@ -228,8 +221,8 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
           >
             <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center">
-                  <Globe className="w-5 h-5 text-white" />
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
+                  <Home className="w-5 h-5 text-white" />
                 </div>
                 <span className="text-xl font-display font-bold text-gray-900">NestMates</span>
               </div>
@@ -271,14 +264,6 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
                 >
                   <MessageSquare className="w-5 h-5" />
                   Messages
-                </Link>
-                <Link
-                  href="/settings"
-                  onClick={() => setIsSidebarOpen(false)}
-                  className="flex items-center gap-3 px-4 py-3 rounded-lg text-base font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                >
-                  <Settings className="w-5 h-5" />
-                  Settings
                 </Link>
                 <button
                   onClick={handleSignOut}

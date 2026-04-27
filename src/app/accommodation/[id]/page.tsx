@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useSession } from 'next-auth/react';
+import { useAuth } from '@/hooks/use-auth';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -61,14 +61,14 @@ const propertyTypeIcons: Record<string, React.ReactNode> = {
 export default function AccommodationDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [post, setPost] = useState<PostDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showChat, setShowChat] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
 
-  const isOwner = session?.user?.id === post?.user.id;
+  const isOwner = user?.id === post?.user.id;
 
   useEffect(() => {
     fetchPost();
@@ -95,7 +95,7 @@ export default function AccommodationDetailPage() {
   };
 
   const handleRespond = async () => {
-    if (!session) {
+    if (!user) {
       toast({
         title: 'Sign in required',
         description: 'Please sign in to respond to this post',

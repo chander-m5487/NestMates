@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSession } from 'next-auth/react';
+import { useAuth } from '@/hooks/use-auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -29,7 +29,7 @@ interface ChatPanelProps {
 }
 
 export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
-  const { data: session } = useSession();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -114,9 +114,9 @@ export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
       sentAt: new Date().toISOString(),
       readAt: null,
       sender: {
-        id: session?.user?.id || '',
-        uniqueUserId: session?.user?.uniqueUserId || '',
-        displayName: session?.user?.displayName || null,
+        id: user?.id || '',
+        uniqueUserId: user?.uniqueUserId || '',
+        displayName: user?.displayName || null,
       },
       isOwn: true,
     };

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useSession } from 'next-auth/react';
+import { useAuth } from '@/hooks/use-auth';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -53,14 +53,14 @@ interface RideDetail {
 export default function RideDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [ride, setRide] = useState<RideDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showChat, setShowChat] = useState(false);
   const [chatId, setChatId] = useState<string | null>(null);
 
-  const isOwner = session?.user?.id === ride?.user.id;
+  const isOwner = user?.id === ride?.user.id;
 
   useEffect(() => {
     fetchRide();
@@ -87,7 +87,7 @@ export default function RideDetailPage() {
   };
 
   const handleRespond = async () => {
-    if (!session) {
+    if (!user) {
       toast({
         title: 'Sign in required',
         description: 'Please sign in to respond to this post',

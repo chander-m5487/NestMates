@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useSession } from 'next-auth/react';
+import { useAuth } from '@/hooks/use-auth';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -9,7 +9,7 @@ import { useToast } from '@/components/ui/use-toast';
 import { Mail, Loader2, Check, Globe } from 'lucide-react';
 
 export default function VerifyOtpPage() {
-  const { data: session } = useSession();
+  const { user } = useAuth();
   const router = useRouter();
   const { toast } = useToast();
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
@@ -116,7 +116,7 @@ export default function VerifyOtpPage() {
           <CardTitle className="text-2xl font-display">Verify Your Email</CardTitle>
           <CardDescription>
             We've sent a 6-digit code to<br />
-            <span className="font-medium text-foreground">{session?.user?.email}</span>
+            <span className="font-medium text-foreground">{user?.email}</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
