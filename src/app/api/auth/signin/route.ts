@@ -5,18 +5,19 @@ import { SignJWT } from 'jose';
 import { cookies } from 'next/headers';
 import { checkRateLimit, getClientIP, RATE_LIMITS, rateLimitResponse } from '@/lib/security/rate-limiter';
 import { sanitizeEmail, isValidEmail } from '@/lib/security/sanitize';
+import { JWT_SECRET } from '@/lib/auth/jwt';
+import { writeAuditLog, truncateIp } from '@/lib/audit';
 
-// In production, NEXTAUTH_SECRET must be set
-const secret = process.env.NEXTAUTH_SECRET;
-if (!secret && process.env.NODE_ENV === 'production') {
-  throw new Error('NEXTAUTH_SECRET must be set in production');
-}
-const JWT_SECRET = new TextEncoder().encode(secret || 'dev-secret-key-change-in-production');
+// Lockout config — SC-002
+const MAX_FAILED_ATTEMPTS = 10;
+const LOCKOUT_MINUTES = 15;
 
 export async function POST(request: NextRequest) {
+  const clientIP = getClientIP(request);
+  const userAgent = request.headers.get('user-agent') ?? undefined;
+
   try {
-    // Rate limiting
-    const clientIP = getClientIP(request);
+    // IP-level rate limit (first layer)
     const rateLimitResult = checkRateLimit(clientIP, 'auth-signin', RATE_LIMITS.AUTH_SIGNIN);
     if (!rateLimitResult.allowed) {
       return rateLimitResponse(rateLimitResult);
@@ -25,62 +26,87 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     let { email, password } = body;
 
-    // Validation
     if (!email || !password) {
-      return NextResponse.json(
-        { message: 'Email and password are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: 'Email and password are required' }, { status: 400 });
     }
 
-    // Sanitize email
     email = sanitizeEmail(email);
-    
     if (!isValidEmail(email)) {
+      return NextResponse.json({ message: 'Invalid email format' }, { status: 400 });
+    }
+
+    const user = await db.user.findUnique({ where: { email: email.toLowerCase() } });
+
+    // Generic error — don't reveal whether the email is registered
+    const INVALID = NextResponse.json({ message: 'Invalid email or password' }, { status: 401 });
+
+    if (!user) return INVALID;
+
+    // SC-005/SC-008: reject suspended/banned accounts before wasting bcrypt
+    if (user.status !== 'ACTIVE') {
+      return NextResponse.json({ message: 'Your account is not available. Please contact support.' }, { status: 403 });
+    }
+
+    // SC-002: DB-backed lockout check — survives restarts and multi-instance
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const seconds = Math.ceil((user.lockedUntil.getTime() - Date.now()) / 1000);
+      await writeAuditLog({ userId: user.id, action: 'LOGIN_FAILED', ipAddress: clientIP, userAgent, metadata: { reason: 'locked' } });
       return NextResponse.json(
-        { message: 'Invalid email format' },
-        { status: 400 }
+        { message: `Account is temporarily locked. Try again in ${Math.ceil(seconds / 60)} minute(s).` },
+        { status: 429 }
       );
     }
 
-    // Find user
-    const user = await db.user.findUnique({
-      where: { email: email.toLowerCase() },
-      include: {
-        accounts: {
-          where: { provider: 'credentials' },
+    if (!user.passwordHash) return INVALID;
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+
+    if (!isValidPassword) {
+      const newAttempts = user.failedLoginAttempts + 1;
+      const shouldLock = newAttempts >= MAX_FAILED_ATTEMPTS;
+      await db.user.update({
+        where: { id: user.id },
+        data: {
+          failedLoginAttempts: newAttempts,
+          ...(shouldLock && { lockedUntil: new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000) }),
         },
+      });
+      await writeAuditLog({
+        userId: user.id, action: 'LOGIN_FAILED',
+        ipAddress: clientIP, userAgent,
+        metadata: { attempt: newAttempts, locked: shouldLock },
+      });
+      if (shouldLock) {
+        await writeAuditLog({ userId: user.id, action: 'ACCOUNT_LOCKED', ipAddress: clientIP, userAgent });
+      }
+      return INVALID;
+    }
+
+    // Block sign-in if email not yet verified — omit email to avoid enumeration
+    if (!user.emailVerified) {
+      return NextResponse.json(
+        { message: 'Please verify your email before signing in.', needsVerification: true },
+        { status: 403 }
+      );
+    }
+
+    // SC-006: persist last login IP + timestamp; reset lockout counter
+    const truncatedIp = truncateIp(clientIP);
+
+    await db.user.update({
+      where: { id: user.id },
+      data: {
+        lastActiveAt: new Date(),
+        lastLoginAt: new Date(),
+        lastLoginIp: truncatedIp,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       },
     });
 
-    if (!user || user.accounts.length === 0) {
-      return NextResponse.json(
-        { message: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
+    // SC-007: audit successful login
+    await writeAuditLog({ userId: user.id, action: 'LOGIN', ipAddress: clientIP, userAgent });
 
-    // Verify password (stored in access_token field)
-    const account = user.accounts[0];
-    const isValidPassword = await bcrypt.compare(
-      password,
-      account.access_token || ''
-    );
-
-    if (!isValidPassword) {
-      return NextResponse.json(
-        { message: 'Invalid email or password' },
-        { status: 401 }
-      );
-    }
-
-    // Update last active
-    await db.user.update({
-      where: { id: user.id },
-      data: { lastActiveAt: new Date() },
-    });
-
-    // Create JWT token
     const token = await new SignJWT({
       id: user.id,
       email: user.email,
@@ -91,31 +117,21 @@ export async function POST(request: NextRequest) {
       .setExpirationTime('7d')
       .sign(JWT_SECRET);
 
-    // Set cookie
     const cookieStore = await cookies();
     cookieStore.set('auth-token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
+      maxAge: 60 * 60 * 24 * 7,
       path: '/',
     });
 
     return NextResponse.json({
       message: 'Signed in successfully',
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        uniqueUserId: user.uniqueUserId,
-      },
+      user: { id: user.id, email: user.email, name: user.name, uniqueUserId: user.uniqueUserId },
     });
   } catch (error) {
     console.error('Signin error:', error);
-    return NextResponse.json(
-      { message: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 });
   }
 }
-

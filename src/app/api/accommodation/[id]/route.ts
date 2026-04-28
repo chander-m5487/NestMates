@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
-import { addWeeks } from 'date-fns';
+import { addHours } from 'date-fns';
+import { writeAuditLog } from '@/lib/audit';
+import { getClientIP } from '@/lib/security/rate-limiter';
 
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const clientIP = getClientIP(request);
   try {
     const { id: postId } = await params;
     const session = await getSession();
@@ -26,8 +29,10 @@ export async function DELETE(
     }
 
     const now = new Date();
-    const chatDeletionDate = addWeeks(now, 1);
+    const chatDeletionDate = addHours(now, 48);
 
+    // Immediately deactivate the post and its chats; chats are hard-deleted
+    // by the cleanup cron 48 hours later.
     await db.accommodationPost.update({
       where: { id: postId },
       data: { isActive: false, deletedAt: now },
@@ -35,10 +40,23 @@ export async function DELETE(
 
     await db.chat.updateMany({
       where: { accommodationPostId: postId },
-      data: { scheduledDeletionAt: chatDeletionDate },
+      data: {
+        isActive: false,
+        expiresAt: now,                     // expired immediately with the post
+        scheduledDeletionAt: chatDeletionDate, // hard-deleted 48 h later by cron
+      },
     });
 
-    return NextResponse.json({ success: true, message: 'Post deleted successfully. Related chats will be deleted in 1 week.' });
+    // SC-007: audit log for post deletion
+    await writeAuditLog({
+      userId: session.id,
+      action: 'POST_DELETE',
+      targetType: 'POST',
+      targetId: postId,
+      ipAddress: clientIP,
+    });
+
+    return NextResponse.json({ success: true, message: 'Post deleted. Related chats will be deleted in 48 hours.' });
   } catch (error) {
     console.error('Error deleting accommodation post:', error);
     return NextResponse.json({ error: 'Failed to delete post' }, { status: 500 });
@@ -55,8 +73,7 @@ export async function GET(
     const post = await db.accommodationPost.findUnique({
       where: { id, isActive: true },
       include: {
-        user: { select: { id: true, uniqueUserId: true, displayName: true, email: true } },
-        state: { include: { country: true } },
+        user: { select: { id: true, uniqueUserId: true, displayName: true } },
       },
     });
 

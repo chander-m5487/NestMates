@@ -1,101 +1,78 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
-import { addMonths } from 'date-fns';
+import { addHours } from 'date-fns';
 import { decrypt } from '@/lib/crypto';
 
-// GET - Fetch user's chats
+// GET - Fetch user's chats (always global — not filtered by country/state)
 export async function GET(request: NextRequest) {
   try {
     const session = await getSession();
-
     if (!session?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Include inactive chats that are still within the 48-hour read window
+    // (scheduledDeletionAt in the future) so users can review them before
+    // they are hard-deleted. Active chats always show; inactive ones show
+    // only until the cron deletes them.
+    const now = new Date();
     const chats = await db.chat.findMany({
       where: {
-        OR: [
-          { ownerId: session.id },
-          { responderId: session.id },
+        AND: [
+          {
+            OR: [{ ownerId: session.id }, { responderId: session.id }],
+          },
+          {
+            OR: [
+              { isActive: true },
+              { isActive: false, scheduledDeletionAt: { gt: now } },
+            ],
+          },
         ],
-        isActive: true,
       },
       include: {
         owner: {
-          select: {
-            id: true,
-            uniqueUserId: true,
-            displayName: true,
-            email: true,
-          },
+          select: { id: true, uniqueUserId: true, displayName: true },
         },
         responder: {
-          select: {
-            id: true,
-            uniqueUserId: true,
-            displayName: true,
-            email: true,
-          },
+          select: { id: true, uniqueUserId: true, displayName: true },
         },
         accommodationPost: {
-          select: {
-            id: true,
-            formattedAddress: true,
-            propertyType: true,
-          },
-        },
-        logisticsPost: {
-          select: {
-            id: true,
-            fromCity: true,
-            toCity: true,
-          },
+          select: { id: true, formattedAddress: true, propertyType: true, isActive: true, expiresAt: true },
         },
         messages: {
           orderBy: { sentAt: 'desc' },
           take: 1,
-          select: {
-            content: true,
-            sentAt: true,
-            senderId: true,
-          },
+          select: { content: true, sentAt: true, senderId: true },
         },
       },
       orderBy: { updatedAt: 'desc' },
     });
 
-    // Get unread counts for all chats
-    const unreadCounts = await Promise.all(
-      chats.map(async (chat) => {
-        const count = await db.message.count({
-          where: {
-            chatId: chat.id,
-            senderId: { not: session.id },
-            readAt: null,
-          },
-        });
-        return { chatId: chat.id, count };
-      })
-    );
-    const unreadMap = new Map(unreadCounts.map(u => [u.chatId, u.count]));
+    // Single aggregated query for all unread counts — replaces the N+1 pattern
+    // of running one count() per chat.
+    const unreadRows = await db.message.groupBy({
+      by: ['chatId'],
+      where: {
+        chatId: { in: chats.map(c => c.id) },
+        senderId: { not: session.id },
+        readAt: null,
+      },
+      _count: { id: true },
+    });
+    const unreadMap = new Map(unreadRows.map(r => [r.chatId, r._count.id]));
 
-    // Format chats for response
     const formattedChats = chats.map((chat) => {
       const isOwner = chat.ownerId === session.id;
       const otherUser = isOwner ? chat.responder : chat.owner;
       const lastMessage = chat.messages[0];
 
-      // Decrypt last message content if present
-      let decryptedContent = null;
+      let decryptedContent: string | null = null;
       if (lastMessage?.content) {
         try {
           decryptedContent = decrypt(lastMessage.content);
         } catch {
-          // If decryption fails, use original (might be unencrypted legacy)
           decryptedContent = lastMessage.content;
         }
       }
@@ -103,28 +80,22 @@ export async function GET(request: NextRequest) {
       return {
         id: chat.id,
         chatType: chat.chatType,
+        isActive: chat.isActive,
+        scheduledDeletionAt: chat.scheduledDeletionAt,
         otherUser: {
           id: otherUser.id,
           uniqueUserId: otherUser.uniqueUserId,
           displayName: otherUser.displayName,
-          email: otherUser.email,
         },
-        post: chat.chatType === 'ACCOMMODATION'
-          ? {
-              id: chat.accommodationPost?.id,
-              title: chat.accommodationPost?.formattedAddress,
-              type: chat.accommodationPost?.propertyType,
-            }
-          : {
-              id: chat.logisticsPost?.id,
-              title: `${chat.logisticsPost?.fromCity} → ${chat.logisticsPost?.toCity}`,
-            },
+        post: {
+          id: chat.accommodationPost?.id,
+          title: chat.accommodationPost?.formattedAddress,
+          type: chat.accommodationPost?.propertyType,
+          isActive: chat.accommodationPost?.isActive ?? false,
+          expiresAt: chat.accommodationPost?.expiresAt ?? null,
+        },
         lastMessage: lastMessage
-          ? {
-              content: decryptedContent,
-              sentAt: lastMessage.sentAt,
-              isOwn: lastMessage.senderId === session.id,
-            }
+          ? { content: decryptedContent, sentAt: lastMessage.sentAt, isOwn: lastMessage.senderId === session.id }
           : null,
         unreadCount: unreadMap.get(chat.id) || 0,
         expiresAt: chat.expiresAt,
@@ -135,102 +106,60 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ chats: formattedChats });
   } catch (error) {
     console.error('Error fetching chats:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch chats' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch chats' }, { status: 500 });
   }
 }
 
-// POST - Create new chat (respond to a post)
+// POST - Create new chat (respond to an accommodation post)
 export async function POST(request: NextRequest) {
   try {
     const session = await getSession();
-
     if (!session?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const body = await request.json();
-    const { postId, postType } = body;
+    const { postId } = body;
 
-    if (!postId || !postType) {
-      return NextResponse.json(
-        { error: 'Missing required fields' },
-        { status: 400 }
-      );
+    if (!postId) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Get the post to find the owner
-    let post;
-    let chatType: string;
-    let postExpiresAt: Date;
-
-    if (postType === 'accommodation') {
-      post = await db.accommodationPost.findUnique({
-        where: { id: postId },
-      });
-      chatType = 'ACCOMMODATION';
-      postExpiresAt = post?.expiresAt || new Date();
-    } else if (postType === 'logistics') {
-      post = await db.logisticsPost.findUnique({
-        where: { id: postId },
-      });
-      chatType = 'LOGISTICS';
-      postExpiresAt = post?.expiresAt || new Date();
-    } else {
-      return NextResponse.json(
-        { error: 'Invalid post type' },
-        { status: 400 }
-      );
-    }
+    const post = await db.accommodationPost.findUnique({
+      where: { id: postId, isActive: true, expiresAt: { gt: new Date() } },
+    });
 
     if (!post) {
-      return NextResponse.json(
-        { error: 'Post not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Post not found or no longer active' }, { status: 404 });
     }
 
-    // Can't chat with yourself
     if (post.userId === session.id) {
-      return NextResponse.json(
-        { error: 'Cannot create chat with yourself' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Cannot create chat with yourself' }, { status: 400 });
     }
 
-    // Check if chat already exists
+    // Return existing active chat if one already exists
     const existingChat = await db.chat.findFirst({
-      where: {
-        chatType,
-        [postType === 'accommodation' ? 'accommodationPostId' : 'logisticsPostId']: postId,
-        responderId: session.id,
-      },
+      where: { accommodationPostId: postId, responderId: session.id, isActive: true },
     });
 
     if (existingChat) {
-      return NextResponse.json({ chat: existingChat });
+      return NextResponse.json({ chat: { id: existingChat.id, chatType: existingChat.chatType } });
     }
 
-    // Create new chat
-    // Chat expires 1 month after post expires
-    const chatExpiresAt = addMonths(postExpiresAt, 1);
+    const chatExpiresAt = post.expiresAt;
+    const chatDeletionDate = addHours(post.expiresAt, 48);
 
     const chat = await db.chat.create({
       data: {
-        chatType,
-        [postType === 'accommodation' ? 'accommodationPostId' : 'logisticsPostId']: postId,
+        chatType: 'ACCOMMODATION',
+        accommodationPostId: postId,
         ownerId: post.userId,
         responderId: session.id,
         expiresAt: chatExpiresAt,
+        scheduledDeletionAt: chatDeletionDate,
       },
     });
 
-    // Create notification for post owner
     await db.notification.create({
       data: {
         userId: post.userId,
@@ -241,12 +170,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ chat }, { status: 201 });
+    return NextResponse.json({ chat: { id: chat.id, chatType: chat.chatType } }, { status: 201 });
   } catch (error) {
     console.error('Error creating chat:', error);
-    return NextResponse.json(
-      { error: 'Failed to create chat' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to create chat' }, { status: 500 });
   }
 }

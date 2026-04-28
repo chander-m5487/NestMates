@@ -1,115 +1,87 @@
 /**
- * Cleanup Job - Lifecycle Management for Posts and Chats
- * 
- * This job handles:
- * 1. Deleting expired accommodation posts (after 3 months)
- * 2. Deleting expired logistics posts (after 1 month)
- * 3. Deleting expired chats (1 month after post deletion)
- * 4. Sending expiry notifications (1 month, 1 week, 1 day before)
- * 
- * Run this as a scheduled cron job: npm run cleanup:scheduled
+ * Cleanup Job — Lifecycle Management for Posts and Chats
+ *
+ * Handles:
+ * 1. Expiring accommodation posts (soft-delete after 30 days)
+ * 2. Hard-deleting old posts (90 days after soft-deletion)
+ * 3. Deactivating chats when their post expires (isActive=false immediately)
+ * 4. Hard-deleting expired chats (48h after post deletion/expiry)
+ * 5. Sending expiry warnings to post owners (7 days and 1 day before listing expires)
+ *
+ * Run as scheduled Cloud Run Job: npm run cleanup:scheduled
  */
 
 import { db } from '@/lib/db';
 import { sendNotificationEmail } from '@/lib/email';
-import { addDays, subDays, subMonths, subWeeks } from 'date-fns';
+import { addHours, addDays, subDays } from 'date-fns';
 
 interface CleanupResult {
-  postsDeleted: number;
+  postsExpired: number;
+  postsHardDeleted: number;
   chatsDeleted: number;
   notificationsSent: number;
 }
 
-/**
- * Main cleanup function
- */
 export async function runCleanup(): Promise<CleanupResult> {
-  console.log('🧹 Starting cleanup job...');
-  
-  const result: CleanupResult = {
-    postsDeleted: 0,
-    chatsDeleted: 0,
-    notificationsSent: 0,
-  };
+  console.log('Starting cleanup job...');
+
+  const result: CleanupResult = { postsExpired: 0, postsHardDeleted: 0, chatsDeleted: 0, notificationsSent: 0 };
 
   try {
-    // 1. Delete expired accommodation posts
-    const expiredAccommodation = await deleteExpiredAccommodationPosts();
-    result.postsDeleted += expiredAccommodation;
+    result.postsExpired = await expireAccommodationPosts();
+    result.postsHardDeleted = await hardDeleteOldPosts();
+    result.chatsDeleted = await deleteExpiredChats();
+    result.notificationsSent = await sendExpiryNotifications();
 
-    // 2. Delete expired logistics posts
-    const expiredLogistics = await deleteExpiredLogisticsPosts();
-    result.postsDeleted += expiredLogistics;
-
-    // 3. Delete expired chats
-    const expiredChats = await deleteExpiredChats();
-    result.chatsDeleted = expiredChats;
-
-    // 4. Send expiry notifications
-    const notifications = await sendExpiryNotifications();
-    result.notificationsSent = notifications;
-
-    console.log('✅ Cleanup completed:', result);
+    console.log('Cleanup completed:', result);
     return result;
   } catch (error) {
-    console.error('❌ Cleanup failed:', error);
+    console.error('Cleanup failed:', error);
     throw error;
   }
 }
 
-/**
- * Delete accommodation posts past their expiry date
- */
-async function deleteExpiredAccommodationPosts(): Promise<number> {
+async function expireAccommodationPosts(): Promise<number> {
   const now = new Date();
 
   const expiredPosts = await db.accommodationPost.findMany({
-    where: {
-      isActive: true,
-      expiresAt: { lt: now },
-    },
-    include: {
-      user: true,
-      chats: true,
-    },
+    where: { isActive: true, expiresAt: { lt: now } },
+    include: { user: true, chats: true },
   });
 
   for (const post of expiredPosts) {
-    // Update chat expiry dates (1 month after post deletion)
+    // Mark the post inactive
+    await db.accommodationPost.update({
+      where: { id: post.id },
+      data: { isActive: false, deletedAt: now },
+    });
+
+    // Immediately deactivate all chats; cron hard-deletes them 48 h later
     await db.chat.updateMany({
       where: { accommodationPostId: post.id },
       data: {
-        expiresAt: addDays(now, 30),
-      },
-    });
-
-    // Soft delete the post
-    await db.accommodationPost.update({
-      where: { id: post.id },
-      data: {
         isActive: false,
-        deletedAt: now,
+        expiresAt: now,                      // chat expired with the post
+        scheduledDeletionAt: addHours(now, 48), // hard-deleted 48 h from now
       },
     });
 
-    // Create notification for post owner
     await db.notification.create({
       data: {
         userId: post.userId,
         type: 'POST_DELETED',
-        title: 'Your accommodation post has expired',
-        message: `Your listing at ${post.formattedAddress} has been removed. Any active chats will remain for 30 more days.`,
-        data: { postId: post.id },
+        title: 'Your accommodation listing has expired',
+        message: `Your listing at ${post.formattedAddress} has expired. Related chats will be permanently deleted in 48 hours.`,
+        data: JSON.stringify({ postId: post.id }),
       },
     });
 
-    // Log the deletion
     await db.cleanupLog.create({
       data: {
         type: 'accommodation_post',
         recordId: post.id,
-        action: 'deleted',
-        details: { address: post.formattedAddress },
+        action: 'expired',
+        details: JSON.stringify({ address: post.formattedAddress }),
       },
     });
   }
@@ -117,262 +89,126 @@ async function deleteExpiredAccommodationPosts(): Promise<number> {
   return expiredPosts.length;
 }
 
-/**
- * Delete logistics posts past their expiry date
- */
-async function deleteExpiredLogisticsPosts(): Promise<number> {
-  const now = new Date();
-
-  const expiredPosts = await db.logisticsPost.findMany({
-    where: {
-      isActive: true,
-      expiresAt: { lt: now },
-    },
-    include: {
-      user: true,
-      chats: true,
-    },
+async function hardDeleteOldPosts(): Promise<number> {
+  // Hard-delete posts that were soft-deleted more than 90 days ago.
+  // By this point all linked chats and messages are long gone (48h window).
+  const cutoff = subDays(new Date(), 90);
+  const result = await db.accommodationPost.deleteMany({
+    where: { isActive: false, deletedAt: { lte: cutoff } },
   });
 
-  for (const post of expiredPosts) {
-    // Update chat expiry dates
-    await db.chat.updateMany({
-      where: { logisticsPostId: post.id },
-      data: {
-        expiresAt: addDays(now, 30),
-      },
-    });
-
-    // Soft delete the post
-    await db.logisticsPost.update({
-      where: { id: post.id },
-      data: {
-        isActive: false,
-        deletedAt: now,
-      },
-    });
-
-    // Create notification
-    await db.notification.create({
-      data: {
-        userId: post.userId,
-        type: 'POST_DELETED',
-        title: 'Your ride share post has expired',
-        message: `Your ride from ${post.fromCity} to ${post.toCity} has been removed.`,
-        data: { postId: post.id },
-      },
-    });
-
-    // Log the deletion
+  if (result.count > 0) {
     await db.cleanupLog.create({
       data: {
-        type: 'logistics_post',
-        recordId: post.id,
-        action: 'deleted',
-        details: { from: post.fromCity, to: post.toCity },
+        type: 'accommodation_post',
+        recordId: 'batch',
+        action: 'hard_deleted',
+        details: JSON.stringify({ count: result.count, cutoffDays: 90 }),
       },
     });
   }
 
-  return expiredPosts.length;
+  return result.count;
 }
 
-/**
- * Delete chats past their expiry date
- */
 async function deleteExpiredChats(): Promise<number> {
   const now = new Date();
 
-  const expiredChats = await db.chat.findMany({
-    where: {
-      isActive: true,
-      expiresAt: { lt: now },
-    },
+  // Hard-delete chats (and their messages) whose scheduledDeletionAt has passed.
+  // These were either manually deleted posts (set immediately) or auto-expired
+  // posts (set 48 h after expiry by deleteExpiredAccommodationPosts above).
+  const chatsToDelete = await db.chat.findMany({
+    where: { scheduledDeletionAt: { lte: now } },
     include: {
-      owner: true,
-      responder: true,
+      owner: { select: { id: true, email: true } },
+      responder: { select: { id: true, email: true } },
     },
   });
 
-  for (const chat of expiredChats) {
-    // Soft delete the chat
-    await db.chat.update({
-      where: { id: chat.id },
-      data: {
-        isActive: false,
-        deletedAt: now,
-      },
-    });
+  for (const chat of chatsToDelete) {
+    await db.message.deleteMany({ where: { chatId: chat.id } });
+    await db.chat.delete({ where: { id: chat.id } });
 
-    // Notify both participants
     for (const user of [chat.owner, chat.responder]) {
       await db.notification.create({
         data: {
           userId: user.id,
           type: 'CHAT_DELETED',
-          title: 'Chat conversation has expired',
-          message: 'This chat has been removed as the associated post has expired.',
-          data: { chatId: chat.id },
+          title: 'Chat conversation deleted',
+          message: 'A chat related to an expired listing has been permanently removed.',
+          data: JSON.stringify({ chatId: chat.id }),
         },
       });
     }
 
-    // Log the deletion
     await db.cleanupLog.create({
-      data: {
-        type: 'chat',
-        recordId: chat.id,
-        action: 'deleted',
-        details: {},
-      },
+      data: { type: 'chat', recordId: chat.id, action: 'hard_deleted', details: null },
     });
   }
 
-  return expiredChats.length;
+  return chatsToDelete.length;
 }
 
-/**
- * Send expiry notifications at 1 month, 1 week, and 1 day before
- */
 async function sendExpiryNotifications(): Promise<number> {
   const now = new Date();
   let notificationCount = 0;
 
-  // Get chats expiring in exactly 30 days, 7 days, and 1 day
-  const oneMonth = addDays(now, 30);
-  const oneWeek = addDays(now, 7);
-  const oneDay = addDays(now, 1);
+  // Warn post owners that their listing is expiring soon (and that chats will
+  // be deleted 48 h after expiry). Two windows: 7 days and 1 day in advance.
+  const windows = [
+    { days: 7, field: 'ownerNotified1Week' as const, label: '7 days' },
+    { days: 1, field: 'ownerNotified1Day'  as const, label: '1 day'  },
+  ];
 
-  // 1 Month notification
-  const chatsExpiring1Month = await db.chat.findMany({
-    where: {
-      isActive: true,
-      expiresAt: {
-        gte: subDays(oneMonth, 1),
-        lt: addDays(oneMonth, 1),
-      },
-      ownerNotified1Month: false,
-    },
-    include: {
-      owner: true,
-      responder: true,
-    },
-  });
+  for (const { days, field, label } of windows) {
+    const windowStart = addDays(now, days);
+    const windowEnd   = addDays(now, days + 1);
 
-  for (const chat of chatsExpiring1Month) {
-    await notifyUser(chat.owner, chat.id, '1 month');
-    await notifyUser(chat.responder, chat.id, '1 month');
-    
-    await db.chat.update({
-      where: { id: chat.id },
-      data: {
-        ownerNotified1Month: true,
-        responderNotified1Month: true,
+    const posts = await db.accommodationPost.findMany({
+      where: {
+        isActive: true,
+        expiresAt: { gte: windowStart, lt: windowEnd },
+        [field]: false,
       },
+      include: { user: true },
     });
-    notificationCount += 2;
-  }
 
-  // 1 Week notification
-  const chatsExpiring1Week = await db.chat.findMany({
-    where: {
-      isActive: true,
-      expiresAt: {
-        gte: subDays(oneWeek, 1),
-        lt: addDays(oneWeek, 1),
-      },
-      ownerNotified1Week: false,
-    },
-    include: {
-      owner: true,
-      responder: true,
-    },
-  });
+    for (const post of posts) {
+      await db.notification.create({
+        data: {
+          userId: post.userId,
+          type: days === 7 ? 'POST_EXPIRING_1_WEEK' : 'POST_EXPIRING_1_DAY',
+          title: `Your listing expires in ${label}`,
+          message: `Your listing at ${post.formattedAddress} will expire in ${label}. Once expired, all related chats will be deleted within 48 hours.`,
+          data: JSON.stringify({ postId: post.id }),
+        },
+      });
 
-  for (const chat of chatsExpiring1Week) {
-    await notifyUser(chat.owner, chat.id, '1 week');
-    await notifyUser(chat.responder, chat.id, '1 week');
-    
-    await db.chat.update({
-      where: { id: chat.id },
-      data: {
-        ownerNotified1Week: true,
-        responderNotified1Week: true,
-      },
-    });
-    notificationCount += 2;
-  }
+      try {
+        await sendNotificationEmail(
+          post.user.email,
+          `Your NestMates listing expires in ${label}`,
+          `Your listing at ${post.formattedAddress} will expire in ${label}. After it expires, all related chats will be permanently deleted within 48 hours.`,
+          `${process.env.NEXT_PUBLIC_APP_URL}/my-posts`
+        );
+      } catch (err) {
+        console.error(`Failed to send expiry email to ${post.user.email}:`, err);
+      }
 
-  // 1 Day notification
-  const chatsExpiring1Day = await db.chat.findMany({
-    where: {
-      isActive: true,
-      expiresAt: {
-        gte: subDays(oneDay, 1),
-        lt: addDays(oneDay, 1),
-      },
-      ownerNotified1Day: false,
-    },
-    include: {
-      owner: true,
-      responder: true,
-    },
-  });
+      await db.accommodationPost.update({
+        where: { id: post.id },
+        data: { [field]: true },
+      });
 
-  for (const chat of chatsExpiring1Day) {
-    await notifyUser(chat.owner, chat.id, '1 day');
-    await notifyUser(chat.responder, chat.id, '1 day');
-    
-    await db.chat.update({
-      where: { id: chat.id },
-      data: {
-        ownerNotified1Day: true,
-        responderNotified1Day: true,
-      },
-    });
-    notificationCount += 2;
+      notificationCount++;
+    }
   }
 
   return notificationCount;
 }
 
-async function notifyUser(
-  user: { id: string; email: string },
-  chatId: string,
-  timeframe: string
-) {
-  // Create in-app notification
-  await db.notification.create({
-    data: {
-      userId: user.id,
-      type: timeframe === '1 month' 
-        ? 'CHAT_EXPIRING_1_MONTH' 
-        : timeframe === '1 week' 
-          ? 'CHAT_EXPIRING_1_WEEK' 
-          : 'CHAT_EXPIRING_1_DAY',
-      title: 'Chat expiring soon',
-      message: `Your chat conversation will be deleted in ${timeframe}. Save any important information now.`,
-      data: { chatId },
-    },
-  });
-
-  // Send email notification
-  try {
-    await sendNotificationEmail(
-      user.email,
-      `Chat Expiring in ${timeframe}`,
-      `Your chat conversation on NestMates will be deleted in ${timeframe}. If you haven't exchanged contact information with the other party, please do so now before the chat is removed.`,
-      `${process.env.NEXT_PUBLIC_APP_URL}/messages`
-    );
-  } catch (error) {
-    console.error(`Failed to send email to ${user.email}:`, error);
-  }
-}
-
-// Run if called directly
 if (require.main === module) {
   runCleanup()
     .then(() => process.exit(0))
     .catch(() => process.exit(1));
 }
-

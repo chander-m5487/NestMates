@@ -95,15 +95,17 @@ export function validatePassword(password: string): { valid: boolean; errors: st
 }
 
 /**
- * Sanitize and validate a full name
+ * Sanitize and validate a full name.
+ * SC-011: allows Unicode letters (ä, ü, ö, Devanagari, Arabic, etc.) so users
+ * from Germany, India, UAE etc. can use their real names.
  */
 export function sanitizeName(name: string): string {
   if (!name || typeof name !== 'string') return '';
-  
+
   return name
     .trim()
-    // Remove numbers and special characters except spaces, hyphens, apostrophes
-    .replace(/[^a-zA-Z\s\-']/g, '')
+    // Allow Unicode letters, spaces, hyphens, apostrophes — strips everything else
+    .replace(/[^\p{L}\s\-']/gu, '')
     // Normalize whitespace
     .replace(/\s+/g, ' ')
     // Limit length

@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
+import { checkRateLimit, getClientIP, RATE_LIMITS, rateLimitResponse } from '@/lib/security/rate-limiter';
 
 // GET - Fetch user's notifications
 export async function GET(request: NextRequest) {
   try {
+    const clientIP = getClientIP(request);
+    const rl = checkRateLimit(clientIP, 'notifications', RATE_LIMITS.API_GENERAL);
+    if (!rl.allowed) return rateLimitResponse(rl);
     const session = await getSession();
 
     if (!session?.id) {

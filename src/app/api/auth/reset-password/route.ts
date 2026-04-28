@@ -3,123 +3,74 @@ import { db } from '@/lib/db';
 import bcrypt from 'bcryptjs';
 import { checkRateLimit, getClientIP, RATE_LIMITS, rateLimitResponse } from '@/lib/security/rate-limiter';
 import { sanitizeEmail, isValidEmail, validatePassword } from '@/lib/security/sanitize';
+import { hashOtp, OTP_TYPE_PASSWORD_RESET } from '@/lib/auth/otp';
+import { writeAuditLog } from '@/lib/audit';
 
 export async function POST(request: NextRequest) {
+  const clientIP = getClientIP(request);
+  const userAgent = request.headers.get('user-agent') ?? undefined;
+
   try {
-    // Rate limiting - strict for password reset
-    const clientIP = getClientIP(request);
     const rateLimitResult = checkRateLimit(clientIP, 'auth-reset-password', RATE_LIMITS.AUTH_FORGOT_PASSWORD);
-    if (!rateLimitResult.allowed) {
-      return rateLimitResponse(rateLimitResult);
-    }
+    if (!rateLimitResult.allowed) return rateLimitResponse(rateLimitResult);
 
     const body = await request.json();
     let { email, code, newPassword } = body;
 
     if (!email || !code || !newPassword) {
-      return NextResponse.json(
-        { message: 'All fields are required' },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: 'All fields are required' }, { status: 400 });
     }
 
-    // Sanitize and validate email
     email = sanitizeEmail(email);
     if (!isValidEmail(email)) {
-      return NextResponse.json(
-        { message: 'Invalid email format' },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: 'Invalid email format' }, { status: 400 });
     }
 
-    // Validate password strength
     const passwordValidation = validatePassword(newPassword);
     if (!passwordValidation.valid) {
-      return NextResponse.json(
-        { message: passwordValidation.errors[0] },
-        { status: 400 }
-      );
+      return NextResponse.json({ message: passwordValidation.errors[0] }, { status: 400 });
     }
 
-    // Find user
-    const user = await db.user.findUnique({
-      where: { email: email.toLowerCase() },
-    });
+    const user = await db.user.findUnique({ where: { email: email.toLowerCase() } });
 
-    if (!user) {
-      return NextResponse.json(
-        { message: 'Invalid reset code' },
-        { status: 400 }
-      );
-    }
+    // Generic error — don't reveal account existence
+    const INVALID = NextResponse.json({ message: 'Invalid reset code' }, { status: 400 });
+    if (!user || user.status !== 'ACTIVE') return INVALID;
 
-    // Find valid OTP
+    // SC-004: only PASSWORD_RESET type codes are valid here
+    // SC-003: compare against stored hash
     const otp = await db.otpCode.findFirst({
       where: {
         userId: user.id,
-        code,
-        type: 'LOGIN',
+        codeHash: hashOtp(String(code)),
+        type: OTP_TYPE_PASSWORD_RESET,
         verified: false,
         expiresAt: { gt: new Date() },
       },
     });
 
-    if (!otp) {
-      return NextResponse.json(
-        { message: 'Invalid or expired reset code' },
-        { status: 400 }
-      );
-    }
+    if (!otp) return INVALID;
 
-    // Mark OTP as used
-    await db.otpCode.update({
-      where: { id: otp.id },
-      data: { verified: true },
-    });
+    // Invalidate the OTP
+    await db.otpCode.update({ where: { id: otp.id }, data: { verified: true } });
 
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
-
-    // Update password in Account
-    await db.account.updateMany({
-      where: {
-        userId: user.id,
-        provider: 'credentials',
-      },
+    // SC-001: update passwordHash on User directly
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await db.user.update({
+      where: { id: user.id },
       data: {
-        access_token: hashedPassword,
+        passwordHash,
+        // Reset any lockout on successful password change
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       },
     });
 
-    // If no credentials account exists, create one
-    const existingAccount = await db.account.findFirst({
-      where: {
-        userId: user.id,
-        provider: 'credentials',
-      },
-    });
+    await writeAuditLog({ userId: user.id, action: 'PASSWORD_RESET', ipAddress: clientIP, userAgent });
 
-    if (!existingAccount) {
-      await db.account.create({
-        data: {
-          userId: user.id,
-          type: 'credentials',
-          provider: 'credentials',
-          providerAccountId: user.id,
-          access_token: hashedPassword,
-        },
-      });
-    }
-
-    return NextResponse.json({
-      message: 'Password reset successfully',
-    });
+    return NextResponse.json({ message: 'Password reset successfully' });
   } catch (error) {
     console.error('Reset password error:', error);
-    return NextResponse.json(
-      { message: 'Internal server error' },
-      { status: 500 }
-    );
+    return NextResponse.json({ message: 'Internal server error' }, { status: 500 });
   }
 }
-

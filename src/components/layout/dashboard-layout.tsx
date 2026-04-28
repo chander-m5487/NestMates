@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { useAuth } from '@/hooks/use-auth';
 import {
   Home,
@@ -13,15 +13,21 @@ import {
   LogOut,
   Menu,
   X,
-  MapPin,
   ChevronDown,
   Loader2,
   FileText,
+  UserCircle,
 } from 'lucide-react';
 import { MessageIndicator } from '@/components/messages/message-indicator';
+import { useCountrySelection } from '@/hooks/use-country-selection';
+import { ProfileSetupDialog } from '@/components/profile/profile-setup-dialog';
 
 interface DashboardLayoutProps {
   children: ReactNode;
+  /**
+   * Optional. Kept for backwards-compatibility with older call sites.
+   * The active nav item is derived from `pathname` so this prop is unused.
+   */
   activeService?: 'accommodation' | 'rides' | 'events' | 'my-posts';
 }
 
@@ -30,21 +36,16 @@ const navigation = [
   { id: 'my-posts', label: 'My Posts', icon: FileText, href: '/my-posts' },
 ];
 
-export function DashboardLayout({ children, activeService }: DashboardLayoutProps) {
+export function DashboardLayout({ children }: DashboardLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, isLoading, isAuthenticated, signOut } = useAuth();
+  const { country, setCountry, allCountries } = useCountrySelection();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [location, setLocation] = useState<{ country: { name: string; flag: string }; stateId: string } | null>(null);
+  const [showProfileSetup, setShowProfileSetup] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem('selectedLocation');
-    if (stored) {
-      setLocation(JSON.parse(stored));
-    }
-  }, []);
+  const profileCheckedRef = useRef(false);
 
   // Close profile dropdown when clicking outside
   useEffect(() => {
@@ -62,6 +63,20 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
       router.replace('/');
     }
   }, [isLoading, isAuthenticated, router]);
+
+  // Once the user is confirmed authenticated, check whether they have a profile.
+  // Profile setup is mandatory — show the dialog until they save it.
+  useEffect(() => {
+    if (isLoading || !isAuthenticated || profileCheckedRef.current) return;
+    profileCheckedRef.current = true;
+
+    fetch('/api/profile')
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data.profile) setShowProfileSetup(true);
+      })
+      .catch(() => { /* silently ignore — don't block UX on network error */ });
+  }, [isLoading, isAuthenticated]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -82,6 +97,10 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {showProfileSetup && (
+        <ProfileSetupDialog onClose={() => setShowProfileSetup(false)} />
+      )}
+
       {/* Top Navigation */}
       <header className="sticky top-0 z-50 bg-white border-b border-gray-200 shadow-sm">
         <div className="flex items-center justify-between h-12 lg:h-14 px-3 lg:px-6">
@@ -93,31 +112,20 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
             >
               {isSidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
             </button>
-            <Link href="/select-location" className="flex items-center gap-2">
-              <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-lg bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
+            <Link href="/accommodation" className="flex items-center gap-2">
+              <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-lg bg-gradient-to-br from-sky-400 to-sky-600 flex items-center justify-center">
                 <Home className="w-4 h-4 lg:w-5 lg:h-5 text-white" />
               </div>
               <span className="text-lg lg:text-xl font-display font-bold text-gray-900 hidden sm:block">NestMates</span>
             </Link>
           </div>
 
-          {/* Location Indicator */}
-          {location && (
-            <button
-              onClick={() => router.push('/select-location')}
-              className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
-            >
-              <span className="text-base lg:text-lg">{location.country.flag}</span>
-              <MapPin className="w-3.5 h-3.5 text-gray-500" />
-              <span className="text-sm lg:text-base font-medium text-gray-700">{location.country.name}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-            </button>
-          )}
-
           {/* Right side */}
           <div className="flex items-center gap-2">
-            {/* Messages */}
-            <MessageIndicator />
+            {/* Mobile-only Messages — desktop chat icon now lives in row 2 */}
+            <div className="lg:hidden">
+              <MessageIndicator />
+            </div>
 
             {/* User Menu */}
             <div className="relative ml-1 lg:ml-2 pl-2 lg:pl-3 border-l border-gray-200" ref={profileRef}>
@@ -160,8 +168,16 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
                       </p>
                     </div>
 
-                    {/* Sign Out */}
+                    {/* Profile & Sign Out */}
                     <div className="py-1">
+                      <Link
+                        href="/profile"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2 w-full text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        <UserCircle className="w-4 h-4 text-sky-500" />
+                        <span className="text-sm font-medium">My Profile</span>
+                      </Link>
                       <button
                         onClick={() => {
                           setIsProfileOpen(false);
@@ -183,6 +199,7 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
         {/* Service Navigation */}
         <div className="hidden lg:block border-t border-gray-100">
           <nav className="flex items-center gap-1 px-6 h-10 lg:h-11">
+            {/* Left group: section links */}
             {navigation.map((item) => {
               const isActive = pathname.startsWith(item.href);
               return (
@@ -202,6 +219,51 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
                 </Link>
               );
             })}
+
+            {/* Right group: chat icon + country selector */}
+            <div className="ml-auto flex items-center gap-2">
+              <MessageIndicator />
+
+              <div
+                className="flex items-center"
+                style={{ position: 'relative' }}
+              >
+                <select
+                  aria-label="Country"
+                  value={country.code}
+                  onChange={(e) => setCountry(e.target.value)}
+                  style={{
+                    appearance: 'none',
+                    WebkitAppearance: 'none',
+                    MozAppearance: 'none',
+                    height: '34px',
+                    padding: '0 28px 0 10px',
+                    borderRadius: '8px',
+                    border: '1px solid #e5e7eb',
+                    background: '#ffffff',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#1f2937',
+                    cursor: 'pointer',
+                    outline: 'none',
+                    minWidth: '120px',
+                    backgroundImage:
+                      "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>\")",
+                    backgroundRepeat: 'no-repeat',
+                    backgroundPosition: 'right 8px center',
+                  }}
+                >
+                  {allCountries.map((c) => (
+                    // Country name first so native browser typeahead (e.g. press
+                    // "i" → India) matches by the actual letter rather than the
+                    // leading flag emoji's regional-indicator codepoint.
+                    <option key={c.code} value={c.code}>
+                      {c.name}  {c.flag}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </nav>
         </div>
       </header>
@@ -221,7 +283,7 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
           >
             <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-blue-700 flex items-center justify-center">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-400 to-sky-600 flex items-center justify-center">
                   <Home className="w-5 h-5 text-white" />
                 </div>
                 <span className="text-xl font-display font-bold text-gray-900">NestMates</span>
@@ -257,6 +319,52 @@ export function DashboardLayout({ children, activeService }: DashboardLayoutProp
               })}
 
               <div className="pt-4 mt-4 border-t border-gray-200">
+                {/* Country selector — mirrors the desktop dropdown so mobile
+                    users can switch their region without leaving the sidebar. */}
+                <div className="px-4 pb-2">
+                  <label
+                    htmlFor="mobile-country-select"
+                    className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1"
+                  >
+                    Country
+                  </label>
+                  <select
+                    id="mobile-country-select"
+                    aria-label="Country"
+                    value={country.code}
+                    onChange={(e) => {
+                      setCountry(e.target.value);
+                      setIsSidebarOpen(false);
+                    }}
+                    style={{
+                      appearance: 'none',
+                      WebkitAppearance: 'none',
+                      MozAppearance: 'none',
+                      width: '100%',
+                      height: '40px',
+                      padding: '0 32px 0 12px',
+                      borderRadius: '8px',
+                      border: '1px solid #e5e7eb',
+                      background: '#ffffff',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      color: '#1f2937',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      backgroundImage:
+                        "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>\")",
+                      backgroundRepeat: 'no-repeat',
+                      backgroundPosition: 'right 10px center',
+                    }}
+                  >
+                    {allCountries.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name}  {c.flag}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <Link
                   href="/messages"
                   onClick={() => setIsSidebarOpen(false)}

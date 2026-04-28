@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 interface User {
@@ -56,13 +56,23 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 }));
 
+// Module-level guard so we only fire one /api/auth/session request per
+// page-load no matter how many components call useAuth(). Resets on a hard
+// page refresh; we don't want stale auth state across reloads.
+let authChecked = false;
+
 export function useAuth() {
   const store = useAuthStore();
-  
+  const triedRef = useRef(false);
+
   useEffect(() => {
+    if (authChecked || triedRef.current) return;
+    triedRef.current = true;
+    authChecked = true;
     store.checkAuth();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  
+
   return store;
 }
 

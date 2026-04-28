@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -8,8 +8,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/components/ui/use-toast';
 import { Mail, Lock, User, ArrowRight, Check, Eye, EyeOff, KeyRound } from 'lucide-react';
+import { SafetyAcknowledgment } from './safety-acknowledgment';
+import { SAFETY_NOTICE_VERSION } from '@/lib/safety/notice';
 
-type AuthMode = 'signin' | 'signup' | 'forgot-password' | 'reset-otp';
+type AuthMode = 'signin' | 'signup' | 'forgot-password' | 'reset-otp' | 'signup-safety';
 
 export function AuthPanel() {
   const router = useRouter();
@@ -17,6 +19,7 @@ export function AuthPanel() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
   const { toast } = useToast();
 
   // Form data
@@ -31,6 +34,14 @@ export function AuthPanel() {
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+
+  // Reset password visibility whenever the auth mode changes so visibility
+  // set in one form never bleeds into another.
+  useEffect(() => {
+    setShowPassword(false);
+    setShowConfirmPassword(false);
+    setShowResetPassword(false);
+  }, [mode]);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -64,13 +75,23 @@ export function AuthPanel() {
           title: 'Welcome back!',
           description: 'Signed in successfully.',
         });
-        // Use replace to prevent going back to login page
-        router.replace('/select-location');
+        router.replace('/accommodation');
       } else {
         const data = await response.json();
+        // Account exists but email not yet verified
+        if (response.status === 403 && data.needsVerification) {
+          toast({
+            title: 'Email not verified',
+            description: 'Check your inbox for the verification code.',
+          });
+          router.replace(`/auth/verify?email=${encodeURIComponent(data.email || formData.email)}`);
+          return;
+        }
         toast({
           title: 'Sign in failed',
-          description: data.message || 'Invalid email or password',
+          description: response.status === 429
+            ? `Too many sign-in attempts. Please wait ${Math.ceil((data.retryAfter ?? 900) / 60)} minute(s) and try again.`
+            : (data.message || data.error || 'Invalid email or password'),
           variant: 'destructive',
         });
       }
@@ -124,34 +145,31 @@ export function AuthPanel() {
           name: formData.fullName,
           email: formData.email,
           password: formData.password,
+          // The user reached this form only after acknowledging the safety
+          // notice on the previous step. We pass that signal + version so the
+          // server can persist it on the User record.
+          safetyAcknowledged: true,
+          safetyVersion: SAFETY_NOTICE_VERSION,
         }),
       });
 
       if (response.ok) {
-        toast({
-          title: 'Account created!',
-          description: 'Signing you in...',
-        });
-        // Auto sign-in after successful signup
-        const signInResponse = await fetch('/api/auth/signin', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: formData.email,
-            password: formData.password,
-          }),
-        });
-        if (signInResponse.ok) {
-          router.replace('/select-location');
-        } else {
-          setMode('signin');
-          setFormData({ ...formData, password: '', confirmPassword: '' });
-        }
-      } else {
         const data = await response.json();
         toast({
+          title: 'Account created!',
+          description: 'Check your email for a 6-digit verification code.',
+        });
+        // Do NOT sign in yet — redirect to email verification page
+        router.replace(`/auth/verify?email=${encodeURIComponent(data.email || formData.email)}`);
+      } else {
+        const data = await response.json();
+        // 429 from rate limiter uses `error` not `message`; also give a human-friendly prompt
+        const description = response.status === 429
+          ? `Too many sign-up attempts. Please wait ${Math.ceil((data.retryAfter ?? 3600) / 60)} minute(s) and try again.`
+          : (data.message || data.error || 'Could not create account');
+        toast({
           title: 'Sign up failed',
-          description: data.message || 'Could not create account',
+          description,
           variant: 'destructive',
         });
       }
@@ -188,15 +206,15 @@ export function AuthPanel() {
 
       if (response.ok) {
         toast({
-          title: 'OTP Sent!',
-          description: 'Check your email for the verification code.',
+          title: 'Code sent!',
+          description: 'If an account exists with that email, a reset code has been sent.',
         });
         setMode('reset-otp');
       } else {
         const data = await response.json();
         toast({
           title: 'Error',
-          description: data.message || 'Could not send OTP',
+          description: data.message || 'Could not send reset code',
           variant: 'destructive',
         });
       }
@@ -318,7 +336,12 @@ export function AuthPanel() {
       className="w-full"
     >
       <AnimatePresence mode="wait">
-        {mode === 'reset-otp' ? (
+        {mode === 'signup-safety' ? (
+          <SafetyAcknowledgment
+            onAccept={() => setMode('signup')}
+            onCancel={() => setMode('signin')}
+          />
+        ) : mode === 'reset-otp' ? (
           <motion.div
             key="reset-otp"
             initial={{ opacity: 0, y: 10 }}
@@ -327,8 +350,8 @@ export function AuthPanel() {
             className="space-y-3 lg:space-y-5"
           >
             <div className="text-center">
-              <div className="w-12 h-12 lg:w-14 lg:h-14 mx-auto mb-2 lg:mb-3 rounded-full bg-orange-100 flex items-center justify-center">
-                <KeyRound className="w-6 h-6 lg:w-7 lg:h-7 text-orange-600" />
+                <div className="w-12 h-12 lg:w-14 lg:h-14 mx-auto mb-2 lg:mb-3 rounded-full bg-sky-100 flex items-center justify-center">
+                <KeyRound className="w-6 h-6 lg:w-7 lg:h-7 text-sky-600" />
               </div>
               <h2 className="text-xl lg:text-2xl font-display font-bold text-gray-800">
                 Reset Password
@@ -352,7 +375,7 @@ export function AuthPanel() {
                     value={digit}
                     onChange={(e) => handleOtpChange(index, e.target.value)}
                     onKeyDown={(e) => handleOtpKeyDown(index, e)}
-                    className="w-8 h-10 lg:w-10 lg:h-12 text-center text-base lg:text-lg font-bold border-2 border-gray-300 rounded-lg focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none transition-all bg-white"
+                    className="w-8 h-10 lg:w-10 lg:h-12 text-center text-base lg:text-lg font-bold border-2 border-gray-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 outline-none transition-all bg-white"
                   />
                 ))}
               </div>
@@ -363,7 +386,7 @@ export function AuthPanel() {
                   <div className="relative">
                     <Input
                       id="newPassword"
-                      type={showPassword ? 'text' : 'password'}
+                      type={showResetPassword ? 'text' : 'password'}
                       placeholder="••••••••"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
@@ -372,10 +395,10 @@ export function AuthPanel() {
                     />
                     <button
                       type="button"
-                      onClick={() => setShowPassword(!showPassword)}
+                      onClick={() => setShowResetPassword(!showResetPassword)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
                     >
-                      {showPassword ? <EyeOff className="w-3.5 h-3.5 lg:w-4 lg:h-4" /> : <Eye className="w-3.5 h-3.5 lg:w-4 lg:h-4" />}
+                      {showResetPassword ? <EyeOff className="w-3.5 h-3.5 lg:w-4 lg:h-4" /> : <Eye className="w-3.5 h-3.5 lg:w-4 lg:h-4" />}
                     </button>
                   </div>
                 </div>
@@ -403,7 +426,7 @@ export function AuthPanel() {
             <p className="text-center text-xs lg:text-sm text-gray-600">
               <button
                 onClick={() => setMode('signin')}
-                className="text-orange-600 hover:underline font-semibold"
+                className="text-sky-600 hover:underline font-semibold"
               >
                 Back to Sign In
               </button>
@@ -418,8 +441,8 @@ export function AuthPanel() {
             className="space-y-3 lg:space-y-5"
           >
             <div className="text-center">
-              <div className="w-12 h-12 lg:w-14 lg:h-14 mx-auto mb-2 lg:mb-3 rounded-full bg-orange-100 flex items-center justify-center">
-                <Mail className="w-6 h-6 lg:w-7 lg:h-7 text-orange-600" />
+              <div className="w-12 h-12 lg:w-14 lg:h-14 mx-auto mb-2 lg:mb-3 rounded-full bg-sky-100 flex items-center justify-center">
+                <Mail className="w-6 h-6 lg:w-7 lg:h-7 text-sky-600" />
               </div>
               <h2 className="text-xl lg:text-2xl font-display font-bold text-gray-800">
                 Forgot Password?
@@ -453,7 +476,7 @@ export function AuthPanel() {
               Remember your password?{' '}
               <button
                 onClick={() => setMode('signin')}
-                className="text-orange-600 hover:underline font-semibold"
+                className="text-sky-600 hover:underline font-semibold"
               >
                 Sign in
               </button>
@@ -499,7 +522,7 @@ export function AuthPanel() {
               )}
 
               <div className="space-y-1">
-                <Label htmlFor="email" className="text-xs lg:text-sm font-semibold text-gray-700">Email</Label>
+                <Label htmlFor="email" className="text-xs lg:text-sm font-semibold text-gray-700">Email <span className="font-normal text-gray-400">(your user ID — visible to others)</span></Label>
                 <Input
                   id="email"
                   type="email"
@@ -563,11 +586,11 @@ export function AuthPanel() {
 
               {mode === 'signin' && (
                 <div className="text-right">
-                  <button
-                    type="button"
-                    onClick={() => setMode('forgot-password')}
-                    className="text-xs lg:text-sm text-orange-600 hover:underline font-semibold"
-                  >
+              <button
+                type="button"
+                onClick={() => setMode('forgot-password')}
+                className="text-xs lg:text-sm text-sky-600 hover:underline font-semibold"
+              >
                     Forgot password?
                   </button>
                 </div>
@@ -585,10 +608,11 @@ export function AuthPanel() {
                   Don't have an account?{' '}
                   <button
                     onClick={() => {
-                      setMode('signup');
+                      // Route through the safety acknowledgment first.
+                      setMode('signup-safety');
                       setFormData({ fullName: '', email: '', password: '', confirmPassword: '' });
                     }}
-                    className="text-orange-600 hover:underline font-semibold"
+                    className="text-sky-600 hover:underline font-semibold"
                   >
                     Sign up
                   </button>
@@ -601,7 +625,7 @@ export function AuthPanel() {
                       setMode('signin');
                       setFormData({ ...formData, password: '', confirmPassword: '' });
                     }}
-                    className="text-orange-600 hover:underline font-semibold"
+                    className="text-sky-600 hover:underline font-semibold"
                   >
                     Sign in
                   </button>

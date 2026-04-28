@@ -28,7 +28,7 @@ export interface RateLimitConfig {
 export const RATE_LIMITS = {
   // Auth endpoints - stricter limits
   AUTH_SIGNIN: { windowMs: 15 * 60 * 1000, maxRequests: 5 },  // 5 attempts per 15 min
-  AUTH_SIGNUP: { windowMs: 60 * 60 * 1000, maxRequests: 3 },  // 3 signups per hour
+  AUTH_SIGNUP: { windowMs: 60 * 60 * 1000, maxRequests: 5 },  // 5 signups per hour
   AUTH_FORGOT_PASSWORD: { windowMs: 60 * 60 * 1000, maxRequests: 3 },  // 3 per hour
   AUTH_RESET_PASSWORD: { windowMs: 15 * 60 * 1000, maxRequests: 5 },  // 5 per 15 min
   

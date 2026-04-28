@@ -32,11 +32,12 @@ export function formatRelativeTime(date: Date | string): string {
 }
 
 /**
- * Format a date for display
+ * Format a date for display in the visitor's local timezone & locale.
+ * Server stores timestamps in UTC; the browser renders them in local time.
  */
 export function formatDate(date: Date | string, options?: Intl.DateTimeFormatOptions): string {
   const target = new Date(date);
-  return target.toLocaleDateString('en-US', {
+  return target.toLocaleDateString(undefined, {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
@@ -45,16 +46,33 @@ export function formatDate(date: Date | string, options?: Intl.DateTimeFormatOpt
 }
 
 /**
- * Format a date with time
+ * Format a date with time in the visitor's local timezone & locale.
  */
 export function formatDateTime(date: Date | string): string {
   const target = new Date(date);
-  return target.toLocaleString('en-US', {
+  return target.toLocaleString(undefined, {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
+  });
+}
+
+/**
+ * Verbose local timestamp suitable for tooltips.
+ * Always shows local date, time, and timezone abbreviation so users
+ * can see the exact local time regardless of where they are in the world.
+ */
+export function formatLocalTimestamp(date: Date | string): string {
+  const target = new Date(date);
+  return target.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short',
   });
 }
 
@@ -97,7 +115,6 @@ export function formatPropertyType(type: string): string {
   const types: Record<string, string> = {
     APARTMENT: 'Apartment',
     SINGLE_HOME: 'Single Home',
-    SHARED_HOME: 'Shared Home',
     TOWNHOME: 'Townhome',
     CONDO: 'Condo',
   };

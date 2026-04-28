@@ -3,6 +3,22 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuth } from '@/hooks/use-auth';
+
+// Reuse one AudioContext for the component's lifetime — creating a new one
+// per beep leaks OS audio resources (browsers cap simultaneous contexts).
+let chatAudioCtx: AudioContext | null = null;
+function getChatAudioCtx(): AudioContext | null {
+  try {
+    if (!chatAudioCtx || chatAudioCtx.state === 'closed') {
+      const Ctor = window.AudioContext || (window as any).webkitAudioContext;
+      if (!Ctor) return null;
+      chatAudioCtx = new Ctor();
+    }
+    return chatAudioCtx;
+  } catch {
+    return null;
+  }
+}
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -26,55 +42,74 @@ interface ChatPanelProps {
   chatId: string;
   onClose: () => void;
   recipientName: string;
+  postExpiresAt?: string | null;
+  postIsActive?: boolean;
 }
 
-export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
+export function ChatPanel({ chatId, onClose, recipientName, postExpiresAt, postIsActive = true }: ChatPanelProps) {
   const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isReadOnly, setIsReadOnly] = useState(!postIsActive);
+  const [deletionAt, setDeletionAt] = useState<string | null>(null);
+  // Set to true when the server returns 410/404 mid-session (post deleted while chat is open)
+  const [chatDeactivated, setChatDeactivated] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const previousMessageCount = useRef(0);
 
   // Play notification beep using Web Audio API
   const playNotificationSound = useCallback(() => {
+    const ctx = getChatAudioCtx();
+    if (!ctx) return;
     try {
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContext) return;
-      
-      const ctx = new AudioContext();
+      const now = ctx.currentTime;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.frequency.value = 600;
       osc.type = 'sine';
-      gain.gain.setValueAtTime(0.2, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.1);
-    } catch (e) {
-      // Audio not available
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      osc.start(now);
+      osc.stop(now + 0.1);
+    } catch {
+      // audio unavailable
     }
   }, []);
 
   const fetchMessages = useCallback(async () => {
     try {
       const response = await fetch(`/api/chats/${chatId}/messages`);
+      if (response.status === 410 || response.status === 404) {
+        // Permanently deleted — stop polling
+        setChatDeactivated(true);
+        setIsReadOnly(true);
+        setIsLoading(false);
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
         const newMessages = data.messages as Message[];
-        
-        // Play sound if there are new messages from others
-        if (!isLoading && newMessages.length > previousMessageCount.current) {
+
+        // Sync read-only state from server (handles post deletion while chat is open)
+        if (data.isReadOnly) {
+          setIsReadOnly(true);
+          setChatDeactivated(true);
+          if (data.scheduledDeletionAt) setDeletionAt(data.scheduledDeletionAt);
+        }
+
+        // Play sound only for new incoming messages after initial load
+        if (previousMessageCount.current > 0 && newMessages.length > previousMessageCount.current) {
           const lastMessage = newMessages[newMessages.length - 1];
           if (lastMessage && !lastMessage.isOwn) {
             playNotificationSound();
           }
         }
-        
+
         previousMessageCount.current = newMessages.length;
         setMessages(newMessages);
       }
@@ -83,12 +118,26 @@ export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [chatId, isLoading, playNotificationSound]);
+  }, [chatId, playNotificationSound]); // removed isLoading — it caused interval resets on every state change
 
   useEffect(() => {
     fetchMessages();
-    const interval = setInterval(fetchMessages, 3000); // Poll every 3 seconds for more responsive chat
-    return () => clearInterval(interval);
+
+    // Pause polling when the tab is hidden — saves server load and battery.
+    // Resumes immediately when the user comes back to the tab.
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') fetchMessages();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') fetchMessages();
+    }, 3000);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [fetchMessages]);
 
   useEffect(() => {
@@ -171,7 +220,38 @@ export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
           </Avatar>
           <div>
             <p className="font-semibold text-sm">{recipientName}</p>
-            <p className="text-xs text-muted-foreground">Private Chat</p>
+            {(() => {
+              const now = new Date();
+              const expiry = postExpiresAt ? new Date(postExpiresAt) : null;
+              // Post was manually deleted (before its natural expiry date)
+              const isManuallyDeleted = chatDeactivated
+                ? (expiry ? expiry > now : true)   // deactivated while expiry still in future
+                : (!postIsActive && expiry ? expiry > now : false);
+              // Post naturally expired (reached 30-day limit)
+              const isNaturallyExpired = chatDeactivated
+                ? (expiry ? expiry <= now : false)
+                : (!postIsActive && expiry ? expiry <= now : false);
+
+              if (isManuallyDeleted) {
+                return (
+                  <p className="text-xs font-medium" style={{ color: '#ef4444' }}>
+                    Listing deleted — chat auto-deletes in 48 hrs
+                  </p>
+                );
+              }
+              if (isNaturallyExpired) {
+                return (
+                  <p className="text-xs font-medium" style={{ color: '#ef4444' }}>
+                    Post expired — chat deletes in 48 hrs
+                  </p>
+                );
+              }
+              return (
+                <p className="text-xs font-medium" style={{ color: '#f87171' }}>
+                  Chat auto-deletes 48 hrs after listing expires
+                </p>
+              );
+            })()}
           </div>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose}>
@@ -226,26 +306,37 @@ export function ChatPanel({ chatId, onClose, recipientName }: ChatPanelProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSend} className="p-4 border-t">
-        <div className="flex gap-2">
-          <Input
-            ref={inputRef}
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder="Type a message..."
-            className="flex-1"
-            disabled={isSending}
-          />
-          <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending}>
-            {isSending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
-          </Button>
+      {/* Input — replaced with read-only banner when post is deleted */}
+      {isReadOnly ? (
+        <div className="p-4 border-t bg-red-50">
+          <p className="text-xs font-medium text-center" style={{ color: '#ef4444' }}>
+            This conversation is read-only.
+            {deletionAt
+              ? ` It will be permanently deleted on ${new Date(deletionAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}.`
+              : ' It will be permanently deleted within 48 hours.'}
+          </p>
         </div>
-      </form>
+      ) : (
+        <form onSubmit={handleSend} className="p-4 border-t">
+          <div className="flex gap-2">
+            <Input
+              ref={inputRef}
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              placeholder="Type a message..."
+              className="flex-1"
+              disabled={isSending}
+            />
+            <Button type="submit" size="icon" disabled={!newMessage.trim() || isSending}>
+              {isSending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+            </Button>
+          </div>
+        </form>
+      )}
     </motion.div>
   );
 }

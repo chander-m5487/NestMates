@@ -1,70 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { db } from '@/lib/db';
+import { checkRateLimit, getClientIP, RATE_LIMITS, rateLimitResponse } from '@/lib/security/rate-limiter';
 
-// GET - Fetch user's own posts
 export async function GET(request: NextRequest) {
   try {
+    const clientIP = getClientIP(request);
+    const rl = checkRateLimit(clientIP, 'my-posts', RATE_LIMITS.API_GENERAL);
+    if (!rl.allowed) return rateLimitResponse(rl);
     const session = await getSession();
 
     if (!session?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Fetch all user's ACTIVE posts (filter out deleted ones)
-    const [accommodationPosts, logisticsPosts, eventPosts] = await Promise.all([
-      db.accommodationPost.findMany({
-        where: { userId: session.id, isActive: true },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          state: {
-            include: { country: true },
-          },
-        },
-      }),
-      db.logisticsPost.findMany({
-        where: { userId: session.id, isActive: true },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          state: {
-            include: { country: true },
-          },
-        },
-      }),
-      db.eventPost.findMany({
-        where: { userId: session.id, isActive: true },
-        orderBy: { createdAt: 'desc' },
-        include: {
-          state: {
-            include: { country: true },
-          },
-        },
-      }),
-    ]);
+    const posts = await db.accommodationPost.findMany({
+      where: { userId: session.id, isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
 
     return NextResponse.json({
-      accommodation: accommodationPosts.map(post => ({
-        ...post,
-        type: 'accommodation',
-      })),
-      rides: logisticsPosts.map(post => ({
-        ...post,
-        type: 'rides',
-      })),
-      events: eventPosts.map(post => ({
-        ...post,
-        type: 'events',
-      })),
+      accommodation: posts.map((post) => ({ ...post, type: 'accommodation' })),
     });
   } catch (error) {
     console.error('Error fetching user posts:', error);
-    return NextResponse.json(
-      { error: 'Failed to fetch posts' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to fetch posts' }, { status: 500 });
   }
 }
-

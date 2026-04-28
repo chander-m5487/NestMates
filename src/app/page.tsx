@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { Home, Globe, Search, MapPin, Shield } from 'lucide-react';
+import { Home, CheckCircle2 } from 'lucide-react';
 import { AuthPanel } from '@/components/auth/auth-panel';
 
 export default function LandingPage() {
@@ -16,11 +16,11 @@ export default function LandingPage() {
         const res = await fetch('/api/auth/session');
         const data = await res.json();
         if (data.user) {
-          router.replace('/select-location');
+          router.replace('/accommodation');
           return;
         }
-      } catch (error) {
-        console.error('Auth check error:', error);
+      } catch {
+        // not authenticated — show landing
       }
       setIsChecking(false);
     };
@@ -29,119 +29,116 @@ export default function LandingPage() {
 
   if (isChecking) {
     return (
-      <div className="min-h-screen flex items-center justify-center"
-        style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 40%, #3b82f6 70%, #93c5fd 100%)' }}>
-        <div className="w-8 h-8 border-4 border-white border-t-transparent rounded-full animate-spin" />
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'linear-gradient(145deg, #075985 0%, #0284c7 40%, #38bdf8 80%, #e0f2fe 100%)' }}
+      >
+        <div className="w-9 h-9 border-4 border-white/60 border-t-white rounded-full animate-spin" />
       </div>
     );
   }
 
   return (
     <div
-      className="min-h-screen relative overflow-x-hidden"
-      style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 40%, #3b82f6 70%, #93c5fd 100%)' }}
+      className="min-h-screen relative overflow-hidden"
+      style={{ background: 'linear-gradient(145deg, #075985 0%, #0284c7 40%, #38bdf8 80%, #e0f2fe 100%)' }}
     >
-      {/* Subtle radial glow effects */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -left-40 w-96 h-96 bg-blue-400/20 rounded-full blur-3xl" />
-        <div className="absolute top-1/2 -right-40 w-80 h-80 bg-blue-300/15 rounded-full blur-3xl" />
-        <div className="absolute -bottom-20 left-1/3 w-72 h-72 bg-indigo-400/20 rounded-full blur-3xl" />
+      {/* Decorative background shapes */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute -top-32 -left-32 w-[500px] h-[500px] bg-white/5 rounded-full blur-3xl" />
+        <div className="absolute top-1/3 -right-48 w-[420px] h-[420px] bg-sky-300/15 rounded-full blur-3xl" />
+        <div className="absolute -bottom-40 left-1/4 w-[380px] h-[380px] bg-cyan-200/10 rounded-full blur-3xl" />
+        {/* Subtle grid lines */}
+        <div
+          className="absolute inset-0 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              'linear-gradient(rgba(255,255,255,0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.8) 1px, transparent 1px)',
+            backgroundSize: '60px 60px',
+          }}
+        />
       </div>
 
-      <div className="relative z-10 min-h-screen flex flex-col lg:flex-row items-center justify-center px-4 sm:px-6 lg:px-8 xl:px-12 py-8 lg:py-6 gap-8 lg:gap-12 xl:gap-16 max-w-7xl mx-auto">
+      <div className="relative z-10 min-h-screen flex flex-col lg:flex-row items-center justify-center px-5 sm:px-8 lg:px-12 xl:px-20 py-10 lg:py-8 gap-10 lg:gap-16 xl:gap-24 max-w-7xl mx-auto">
 
-        {/* Left — Hero Content */}
-        <div className="flex-1 max-w-lg xl:max-w-xl">
+        {/* ── Left: Hero ── */}
+        <div className="flex-1 max-w-xl xl:max-w-2xl text-center lg:text-left">
 
           {/* Logo */}
           <motion.div
-            initial={{ opacity: 0, y: -20 }}
+            initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6 }}
-            className="mb-6 lg:mb-8"
+            transition={{ duration: 0.55 }}
+            className="mb-8 lg:mb-10 flex items-center gap-3 justify-center lg:justify-start"
           >
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 lg:w-13 lg:h-13 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-lg border border-white/30">
-                <Home className="w-5 h-5 lg:w-6 lg:h-6 text-white" />
-              </div>
-              <span className="text-2xl lg:text-3xl font-display font-bold text-white tracking-tight">NestMates</span>
+            <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-md flex items-center justify-center shadow-xl border border-white/30">
+              <Home className="w-6 h-6 text-white" />
             </div>
+            <span className="text-3xl font-display font-bold text-white tracking-tight">NestMates</span>
           </motion.div>
 
           {/* Headline */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-            className="mb-6 lg:mb-8"
+            transition={{ duration: 0.6, delay: 0.15 }}
+            className="mb-6"
           >
-            <h1 className="text-3xl sm:text-4xl xl:text-5xl font-display font-bold leading-tight mb-4">
-              <span className="text-white">Find Your </span>
-              <span className="text-blue-200">Perfect Home</span>
+            <h1 className="text-4xl sm:text-5xl xl:text-6xl font-display font-extrabold leading-[1.1] mb-5">
+              <span className="text-white drop-shadow-md">Find Your</span>
               <br />
-              <span className="text-white">Wherever You Are</span>
+              <span
+                className="drop-shadow-md"
+                style={{
+                  background: 'linear-gradient(90deg, #ffffff 0%, #bae6fd 50%, #ffffff 100%)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}
+              >
+                Next Home
+              </span>
+              <br />
+              <span className="text-white/90 drop-shadow-md">Wherever You Are</span>
             </h1>
 
-            <p className="text-blue-100 text-base lg:text-lg leading-relaxed mb-2 font-medium">
-              The trusted housing platform for immigrants and international students.
-            </p>
-            <p className="text-blue-200/80 text-sm lg:text-base leading-relaxed">
-              Find apartments, shared homes, and roommates in{' '}
-              <span className="text-white font-semibold">USA</span>,{' '}
-              <span className="text-white font-semibold">Canada</span>,{' '}
-              <span className="text-white font-semibold">UK</span>,{' '}
-              <span className="text-white font-semibold">Germany</span> &{' '}
-              <span className="text-white font-semibold">Australia</span>.
+            <p className="text-white/75 text-base sm:text-lg leading-relaxed max-w-md mx-auto lg:mx-0">
+              A community-driven platform helping people find housing, connect with roommates, and settle in — wherever life takes them.
             </p>
           </motion.div>
 
-          {/* Feature cards */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
+          {/* Benefit highlights */}
+          <motion.ul
+            initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.4 }}
-            className="grid grid-cols-3 gap-3"
+            transition={{ duration: 0.6, delay: 0.3 }}
+            className="flex flex-col gap-2 mb-10 text-sm sm:text-base text-white/85 max-w-sm mx-auto lg:mx-0"
           >
-            <FeatureCard icon={<Search className="w-5 h-5 lg:w-6 lg:h-6" />}   title="Search"    description="Browse listings"  delay={0} />
-            <FeatureCard icon={<MapPin className="w-5 h-5 lg:w-6 lg:h-6" />}   title="Location"  description="Find by area"     delay={0.1} />
-            <FeatureCard icon={<Shield className="w-5 h-5 lg:w-6 lg:h-6" />}   title="Trusted"   description="Verified users"   delay={0.2} />
-          </motion.div>
+            {[
+              'Browse housing listings posted by real people in your area',
+              'Find roommates and shared spaces that fit your needs',
+              'Post your own listing and reach people looking to move',
+            ].map((text) => (
+              <li key={text} className="flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-sky-200 flex-shrink-0 mt-0.5" />
+                <span>{text}</span>
+              </li>
+            ))}
+          </motion.ul>
         </div>
 
-        {/* Right — Auth Panel */}
+        {/* ── Right: Auth Card ── */}
         <motion.div
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.6, delay: 0.3 }}
-          className="w-full max-w-xs sm:max-w-sm lg:max-w-md flex-shrink-0"
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.65, delay: 0.25 }}
+          className="w-full max-w-sm sm:max-w-md flex-shrink-0"
         >
-          <div className="bg-white rounded-2xl shadow-2xl p-6 lg:p-8 border border-blue-100">
+          <div className="bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl shadow-sky-950/25 p-7 sm:p-8 border border-white/60">
             <AuthPanel />
           </div>
         </motion.div>
+
       </div>
     </div>
-  );
-}
-
-interface FeatureCardProps {
-  icon: React.ReactNode;
-  title: string;
-  description: string;
-  delay: number;
-}
-
-function FeatureCard({ icon, title, description, delay }: FeatureCardProps) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: 0.6 + delay }}
-      className="p-3 lg:p-4 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20 hover:bg-white/20 hover:scale-105 transition-all duration-300 text-center"
-    >
-      <div className="mb-2 text-blue-200 flex justify-center">{icon}</div>
-      <h3 className="font-bold text-xs lg:text-sm text-white mb-0.5">{title}</h3>
-      <p className="text-[10px] lg:text-xs text-blue-200/80 hidden sm:block">{description}</p>
-    </motion.div>
   );
 }

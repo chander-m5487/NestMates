@@ -24,35 +24,64 @@ model User {
   image         String?
   phone         String?
   phoneVerified Boolean   @default(false)
-  
+
+  // Credentials — SC-001: password hash lives here, NOT in Account.access_token
+  passwordHash  String?
+
+  // Role & status — SC-005: enables ban/suspend without hard delete
+  role          String    @default("USER")    // USER | MODERATOR | ADMIN
+  status        String    @default("ACTIVE")  // ACTIVE | SUSPENDED | BANNED
+  banReason     String?
+  bannedAt      DateTime?
+  bannedBy      String?   // userId of admin who actioned the ban
+
+  // Brute-force lockout — SC-002: survives restarts, works across instances
+  failedLoginAttempts Int      @default(0)
+  lockedUntil         DateTime?
+
+  // Login tracking — SC-006: fraud detection, incident response
+  lastLoginAt   DateTime?
+  lastLoginIp   String?   // last octet zeroed: "1.2.3.x"
+  signupIp      String?   // same format
+
   // Privacy settings
   showRealName  Boolean   @default(false)
-  
+  preferredCountry String? // ISO code — default filter after login
+
+  // Safety acknowledgment (community guidelines + liability disclaimer)
+  safetyAcknowledgedAt      DateTime?
+  safetyAcknowledgedVersion String?  // e.g. "v1" — bumped when policy changes
+
   // Timestamps
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
   lastActiveAt  DateTime  @default(now())
-  
+
   // Relations
   accounts      Account[]
   sessions      Session[]
   otpCodes      OtpCode[]
-  
+  profile       UserProfile?
+
   // Posts
   accommodationPosts  AccommodationPost[]
-  logisticsPosts      LogisticsPost[]
-  eventPosts          EventPost[]
-  
+
   // Chat relations
   chatsAsOwner        Chat[]         @relation("ChatOwner")
   chatsAsResponder    Chat[]         @relation("ChatResponder")
   messages            Message[]
-  
+
   // Notifications
   notifications       Notification[]
-  
+
+  // Trust & safety — SC-012/SC-013
+  postReports         PostReport[]   @relation("ReportsMade")
+  blocksGiven         UserBlock[]    @relation("BlocksMade")
+  blocksReceived      UserBlock[]    @relation("BlocksReceived")
+
   @@index([email])
   @@index([uniqueUserId])
+  @@index([status])
 }
 
 model Account {
@@ -96,52 +125,61 @@ model VerificationToken {
 model OtpCode {
   id        String   @id @default(cuid())
   userId    String
-  code      String
-  type      String   // EMAIL_VERIFICATION, PHONE_VERIFICATION, LOGIN
+  // SC-003: store SHA-256 hex digest, never the plaintext code
+  codeHash  String
+  type      String   // EMAIL_VERIFICATION | PASSWORD_RESET | LOGIN
   expiresAt DateTime
   verified  Boolean  @default(false)
   attempts  Int      @default(0)
+  // SC-010: capture requesting IP/UA for abuse investigation
+  ipAddress String?
+  userAgent String?
   createdAt DateTime @default(now())
-  
+
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
+
   @@index([userId])
-  @@index([code, type])
+  @@index([codeHash, type])
+}
+
+// ============================================
+// USER PROFILE (lifestyle & demographics)
+// ============================================
+// Separate from User (auth) so sensitive fields are isolated, optional, and
+// independently GDPR-deletable. 1:1 with User; created lazily on first save.
+
+model UserProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+
+  // Lifestyle
+  smoking     String?  // NEVER | OCCASIONALLY | REGULARLY
+  drinking    String?  // NEVER | OCCASIONALLY | REGULARLY
+  dietary     String?  // VEG | NON_VEG | EGGETARIAN | VEGAN | OTHER
+
+  // Demographics
+  dateOfBirth DateTime?
+  gender      String?  // MALE | FEMALE | NON_BINARY | PREFER_NOT_TO_SAY | OTHER
+  ethnicity   String?  // Free text — user-supplied, max 80 chars
+
+  // Short bio shown on profile popup
+  bio         String?  // max 300 chars
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ============================================
 // LOCATION & GEOGRAPHY
 // ============================================
-
-model Country {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  code      String   @unique // ISO 3166-1 alpha-2
-  flag      String   // Emoji flag
-  isActive  Boolean  @default(true)
-  sortOrder Int      @default(0)
-  
-  states    State[]
-  
-  @@index([code])
-}
-
-model State {
-  id        String   @id @default(cuid())
-  name      String
-  code      String   // State/Province code
-  countryId String
-  isActive  Boolean  @default(true)
-  
-  country   Country  @relation(fields: [countryId], references: [id])
-  
-  accommodationPosts AccommodationPost[]
-  logisticsPosts     LogisticsPost[]
-  eventPosts         EventPost[]
-  
-  @@unique([countryId, code])
-  @@index([countryId])
-}
+// NOTE: Country/State data lives in src/lib/geo.ts (hardcoded, no DB needed).
+// The old Country + State DB models and LogisticsPost + EventPost modules
+// were removed (SC-015): features dropped, models were orphaned dead weight.
 
 // ============================================
 // ACCOMMODATION MODULE
@@ -153,19 +191,21 @@ model AccommodationPost {
   // Title
   title         String?
   
-  // Location
-  stateId       String
+  // Location (free-text, no fixed geography required)
+  country       String?  // Free-text country name (e.g. "USA", "Germany")
+  state         String?  // Free-text state/province name (e.g. "Texas", "Ontario")
   city          String
   zipCode       String?
   
-  // Address (from Google Maps)
+  // Address (from Google Maps or manually pinned)
   formattedAddress String
   latitude      Float
   longitude     Float
-  placeId       String?  // Google Place ID
+  placeId       String?  // Google Place ID (null if manually pinned)
+  manualPin     Boolean  @default(false) // true when location was set via draggable map pin
   
   // Property details
-  propertyType  String   // APARTMENT, SINGLE_HOME, SHARED_HOME, TOWNHOME, CONDO
+  propertyType  String   // APARTMENT, SINGLE_HOME, TOWNHOME, CONDO
   rent          Float?   // Monthly rent amount
   description   String
   
@@ -175,116 +215,21 @@ model AccommodationPost {
   // Lifecycle
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
-  expiresAt     DateTime // Auto-calculated: createdAt + 3 months
+  expiresAt     DateTime // Auto-calculated: createdAt + 30 days
   isActive      Boolean  @default(true)
   deletedAt     DateTime?
   
   // Relations
-  state         State    @relation(fields: [stateId], references: [id])
   user          User     @relation(fields: [userId], references: [id])
   chats         Chat[]
+  reports       PostReport[]
   
-  @@index([stateId, isActive])
   @@index([userId])
   @@index([expiresAt])
   @@index([city])
   @@index([zipCode])
-}
-
-// ============================================
-// LOGISTICS / RIDE SHARE MODULE
-// ============================================
-
-model LogisticsPost {
-  id            String    @id @default(cuid())
-  
-  // Title
-  title         String?
-  
-  // Location
-  stateId       String
-  
-  // From location
-  fromCity      String
-  fromAddress   String
-  fromLatitude  Float
-  fromLongitude Float
-  fromPlaceId   String?
-  
-  // To location
-  toCity        String
-  toAddress     String
-  toLatitude    Float
-  toLongitude   Float
-  toPlaceId     String?
-  
-  // Trip details
-  travelDate    DateTime
-  description   String
-  seatsAvailable Int?
-  
-  // Owner
-  userId        String
-  
-  // Lifecycle
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  expiresAt     DateTime  // Auto-calculated: createdAt + 1 month
-  isActive      Boolean   @default(true)
-  deletedAt     DateTime?
-  
-  // Relations
-  state         State     @relation(fields: [stateId], references: [id])
-  user          User      @relation(fields: [userId], references: [id])
-  chats         Chat[]
-  
-  @@index([stateId, isActive])
-  @@index([userId])
-  @@index([expiresAt])
-  @@index([travelDate])
-  @@index([fromCity])
-  @@index([toCity])
-}
-
-// ============================================
-// EVENTS / PERSONAL ADS MODULE
-// ============================================
-
-model EventPost {
-  id            String    @id @default(cuid())
-  
-  // Location
-  stateId       String
-  city          String?
-  venue         String?
-  
-  // Event details
-  title         String
-  description   String
-  eventDate     DateTime?
-  eventType     String    // COMMUNITY_EVENT, CULTURAL_FESTIVAL, MEETUP, WORKSHOP, PERSONAL_AD, SERVICE, OTHER
-  
-  // Contact (optional public)
-  contactInfo   String?
-  
-  // Owner
-  userId        String
-  
-  // Lifecycle
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  expiresAt     DateTime? // Optional expiry
-  isActive      Boolean   @default(true)
-  deletedAt     DateTime?
-  
-  // Relations
-  state         State     @relation(fields: [stateId], references: [id])
-  user          User      @relation(fields: [userId], references: [id])
-  
-  @@index([stateId, isActive])
-  @@index([userId])
-  @@index([eventType])
-  @@index([eventDate])
+  @@index([country, state, isActive])
+  @@index([isActive, createdAt])
 }
 
 // ============================================
@@ -293,45 +238,42 @@ model EventPost {
 
 model Chat {
   id                  String     @id @default(cuid())
-  
-  // Chat type determines which post it belongs to
-  chatType            String     // ACCOMMODATION, LOGISTICS
-  
-  // Post references (one will be set based on chatType)
+
+  // Only accommodation chats exist — logistics/events features removed
+  chatType            String     @default("ACCOMMODATION")
+
+  // Post reference
   accommodationPostId String?
-  logisticsPostId     String?
-  
+
   // Participants
   ownerId             String     // Post owner
   responderId         String     // Person who responded
-  
+
   // Lifecycle
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
-  expiresAt           DateTime   // Post expiry + 1 month
-  scheduledDeletionAt DateTime?  // 1 week after post deletion/expiration
-  
+  expiresAt           DateTime   // Post expiry + buffer
+  scheduledDeletionAt DateTime?  // 48h after post deletion/expiration
+
   // Notification tracking
-  ownerNotified1Month    Boolean @default(false)
-  ownerNotified1Week     Boolean @default(false)
-  ownerNotified1Day      Boolean @default(false)
+  ownerNotified1Month     Boolean @default(false)
+  ownerNotified1Week      Boolean @default(false)
+  ownerNotified1Day       Boolean @default(false)
   responderNotified1Month Boolean @default(false)
   responderNotified1Week  Boolean @default(false)
   responderNotified1Day   Boolean @default(false)
-  
+
   // Status
   isActive            Boolean    @default(true)
   deletedAt           DateTime?
-  
+
   // Relations
   accommodationPost   AccommodationPost? @relation(fields: [accommodationPostId], references: [id], onDelete: Cascade)
-  logisticsPost       LogisticsPost?     @relation(fields: [logisticsPostId], references: [id], onDelete: Cascade)
   owner               User               @relation("ChatOwner", fields: [ownerId], references: [id])
   responder           User               @relation("ChatResponder", fields: [responderId], references: [id])
   messages            Message[]
-  
+
   @@unique([accommodationPostId, responderId])
-  @@unique([logisticsPostId, responderId])
   @@index([ownerId])
   @@index([responderId])
   @@index([expiresAt])
@@ -339,20 +281,24 @@ model Chat {
 }
 
 model Message {
-  id        String   @id @default(cuid())
-  chatId    String
-  senderId  String
-  content   String
-  
+  id          String    @id @default(cuid())
+  chatId      String
+  senderId    String
+  content     String
+  // Message type — TEXT (default) | SYSTEM (auto-generated notices)
+  messageType String    @default("TEXT")
+
   // Delivery status
-  sentAt    DateTime @default(now())
+  sentAt      DateTime  @default(now())
   deliveredAt DateTime?
-  readAt    DateTime?
-  
+  readAt      DateTime?
+  // Soft-delete — shows "This message was deleted" in UI instead of blank gap
+  deletedAt   DateTime?
+
   // Relations
-  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
-  sender    User     @relation(fields: [senderId], references: [id])
-  
+  chat        Chat      @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  sender      User      @relation(fields: [senderId], references: [id])
+
   @@index([chatId, sentAt])
   @@index([senderId])
 }
@@ -391,11 +337,74 @@ model Notification {
 
 model CleanupLog {
   id          String   @id @default(cuid())
-  type        String   // 'accommodation_post', 'logistics_post', 'chat', etc.
+  type        String   // 'accommodation_post', 'chat', etc.
   recordId    String
   action      String   // 'deleted', 'notification_sent'
   details     String?
   executedAt  DateTime @default(now())
-  
+
   @@index([type, executedAt])
+}
+
+// ============================================
+// SECURITY — AUDIT LOG (SC-007)
+// ============================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  // userId is null for system-initiated actions (cron, cleanup)
+  userId      String?
+  action      String   // LOGIN | LOGOUT | SIGNUP | PASSWORD_RESET | POST_DELETE
+                       // ACCOUNT_SUSPEND | ACCOUNT_BAN | OTP_VERIFY | OTP_FAIL
+                       // POST_CREATE | CHAT_DELETE | MESSAGE_DELETE
+  targetType  String?  // USER | POST | CHAT | MESSAGE
+  targetId    String?  // id of the affected record
+  ipAddress   String?  // truncated: last octet zeroed
+  userAgent   String?
+  metadata    String?  // JSON string for extra context
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+}
+
+// ============================================
+// TRUST & SAFETY (SC-012 / SC-013)
+// ============================================
+
+model PostReport {
+  id          String   @id @default(cuid())
+  reporterId  String
+  postId      String
+  // Reason enum values: SCAM | FAKE | OFFENSIVE | WRONG_CATEGORY | OTHER
+  reason      String
+  description String?
+  // Status: PENDING | REVIEWED | DISMISSED | ACTION_TAKEN
+  status      String   @default("PENDING")
+  resolvedAt  DateTime?
+  resolvedBy  String?  // admin userId
+
+  createdAt   DateTime @default(now())
+
+  reporter    User              @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+  post        AccommodationPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  // One report per user per post — prevents spam-reporting
+  @@unique([reporterId, postId])
+  @@index([status, createdAt])
+  @@index([postId])
+}
+
+model UserBlock {
+  id         String   @id @default(cuid())
+  blockerId  String
+  blockedId  String
+  createdAt  DateTime @default(now())
+
+  blocker    User     @relation("BlocksMade", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked    User     @relation("BlocksReceived", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
 }

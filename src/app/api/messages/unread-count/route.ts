@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const session = await getSession();
 
     if (!session?.id) {
-      return NextResponse.json({ count: 0 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Count unread messages in chats where the user is a participant
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ count: unreadCount });
   } catch (error) {
     console.error('Error counting unread messages:', error);
-    return NextResponse.json({ count: 0 });
+    return NextResponse.json({ error: 'Failed to count messages' }, { status: 500 });
   }
 }
 

@@ -11,7 +11,6 @@ const ContentSecurityPolicy = `
   object-src 'none';
   base-uri 'self';
   form-action 'self';
-  upgrade-insecure-requests;
 `.replace(/\s{2,}/g, ' ').trim();
 
 const securityHeaders = [
@@ -24,7 +23,7 @@ const securityHeaders = [
   // Strict HSTS - only enable when HTTPS is confirmed in production
   // { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
   // Disable browser features not needed
-  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), payment=()' },
+  { key: 'Permissions-Policy', value: 'camera=(), microphone=(), payment=(), geolocation=(self)' },
   // Content Security Policy
   { key: 'Content-Security-Policy', value: ContentSecurityPolicy },
   // XSS protection (legacy browsers)
@@ -36,6 +35,22 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  devIndicators: false,
+
+  // Allow other devices on the local network to access the dev server.
+  // List specific LAN IPs and any wildcards needed for your subnet — Next.js
+  // dev rejects cross-origin asset requests from any host not listed here.
+  allowedDevOrigins: ['192.168.1.113', '192.168.1.215', '192.168.1.*'],
+
+  // Disable source maps in production — reduces build memory & bundle size
+  productionBrowserSourceMaps: false,
+
+  // Strip console.* calls from production bundle (keeps dev logs intact)
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production'
+      ? { exclude: ['error', 'warn'] }
+      : false,
+  },
 
   images: {
     remotePatterns: [

@@ -3,7 +3,6 @@ import crypto from 'crypto';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 const AUTH_TAG_LENGTH = 16;
-const SALT_LENGTH = 32;
 
 // Get encryption key from environment variable
 function getEncryptionKey(): Buffer {
@@ -81,32 +80,12 @@ export function decrypt(encryptedText: string): string {
 }
 
 /**
- * Hash a password using bcrypt-like approach with PBKDF2
- */
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(SALT_LENGTH);
-  const hash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512');
-  return `${salt.toString('base64')}:${hash.toString('base64')}`;
-}
-
-/**
- * Verify a password against a hash
- */
-export function verifyPassword(password: string, storedHash: string): boolean {
-  try {
-    const [saltBase64, hashBase64] = storedHash.split(':');
-    const salt = Buffer.from(saltBase64, 'base64');
-    const hash = Buffer.from(hashBase64, 'base64');
-    
-    const verifyHash = crypto.pbkdf2Sync(password, salt, 100000, 64, 'sha512');
-    return crypto.timingSafeEqual(hash, verifyHash);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Generate a secure random token
+ * SC-014: hashPassword / verifyPassword (PBKDF2) removed.
+ * All password hashing uses bcryptjs in the auth routes — having two
+ * implementations risks future developers using the wrong one.
+ *
+ * Remaining exports: encrypt/decrypt (AES-256-GCM), generateSecureToken,
+ * generateOTP (kept for backward compat; prefer generateOtp in lib/auth/otp.ts).
  */
 export function generateSecureToken(length: number = 32): string {
   return crypto.randomBytes(length).toString('hex');

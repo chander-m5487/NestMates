@@ -17,6 +17,11 @@ export async function GET(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const now = new Date();
+
+    // Allow reading messages even after a post is deleted, as long as the
+    // chat is within its 48-hour read window (scheduledDeletionAt in future).
+    // Only hard-block once the chat no longer exists (deleted by cron).
     const chat = await db.chat.findFirst({
       where: {
         id: chatId,
@@ -28,6 +33,12 @@ export async function GET(
       return NextResponse.json({ error: 'Chat not found or access denied' }, { status: 404 });
     }
 
+    // Chat is past its deletion window — should already be hard-deleted by cron,
+    // but guard here just in case.
+    if (chat.scheduledDeletionAt && chat.scheduledDeletionAt <= now) {
+      return NextResponse.json({ error: 'This chat has been permanently deleted' }, { status: 410 });
+    }
+
     const messages = await db.message.findMany({
       where: { chatId },
       orderBy: { sentAt: 'asc' },
@@ -36,12 +47,18 @@ export async function GET(
       },
     });
 
-    await db.message.updateMany({
-      where: { chatId, senderId: { not: session.id }, readAt: null },
-      data: { readAt: new Date() },
-    });
+    // Only mark as read if the chat is still active (no point updating a
+    // read-only archived conversation)
+    if (chat.isActive) {
+      await db.message.updateMany({
+        where: { chatId, senderId: { not: session.id }, readAt: null },
+        data: { readAt: new Date() },
+      });
+    }
 
     return NextResponse.json({
+      isReadOnly: !chat.isActive,
+      scheduledDeletionAt: chat.scheduledDeletionAt,
       messages: messages.map((msg) => {
         let content = msg.content;
         try {
